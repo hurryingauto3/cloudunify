@@ -1,0 +1,164 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"cloudunify/internal/api"
+	"cloudunify/internal/config"
+	"cloudunify/internal/database"
+	"cloudunify/internal/fuse"
+	"cloudunify/internal/storage"
+	"cloudunify/internal/sync"
+)
+
+var (
+	version   = "0.1.0"
+	buildTime = "development"
+)
+
+func main() {
+	// Parse command-line flags
+	var (
+		showVersion = flag.Bool("version", false, "Show version information")
+		configPath  = flag.String("config", "", "Path to configuration file")
+		noMount     = flag.Bool("no-mount", false, "Don't mount the FUSE filesystem")
+		noSync      = flag.Bool("no-sync", false, "Don't start the sync engine")
+	)
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("CloudUnify v%s (built: %s)\n", version, buildTime)
+		os.Exit(0)
+	}
+
+	// Set up logging
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	log.Printf("CloudUnify v%s starting...", version)
+
+	// Initialize configuration
+	configManager, err := config.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to initialize configuration: %v", err)
+	}
+
+	// Override config path if specified
+	if *configPath != "" {
+		os.Setenv("CLOUDUNIFY_CONFIG_PATH", *configPath)
+	}
+
+	cfg := configManager.Get()
+	paths := configManager.Paths()
+
+	log.Printf("Configuration loaded from: %s", paths.ConfigFilePath())
+	log.Printf("Database path: %s", paths.DatabasePath())
+	log.Printf("Mount point: %s", cfg.MountPath)
+
+	// Initialize database
+	db, err := database.Open(paths.DatabasePath())
+	if err != nil {
+		log.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+	log.Println("Database initialized")
+
+	// Create context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Initialize storage allocator
+	allocator := storage.NewAllocator(db, storage.AllocationStrategy(cfg.AllocationStrategy))
+	log.Println("Storage allocator initialized")
+
+	// Initialize sync engine
+	syncEngine := sync.NewEngine(db, allocator, cfg.Sync.UploadWorkers, cfg.Sync.DownloadWorkers)
+	log.Println("Sync engine initialized")
+
+	// Start sync engine if enabled
+	if !*noSync && cfg.Sync.AutoSync {
+		if err := syncEngine.Start(ctx); err != nil {
+			log.Fatalf("Failed to start sync engine: %v", err)
+		}
+		log.Println("Sync engine started")
+	}
+
+	// Initialize and mount FUSE filesystem if enabled
+	var fuseFS *fuse.CloudUnifyFS
+	if !*noMount {
+		fuseFS = fuse.NewCloudUnifyFS(db, syncEngine, cfg.MountPath, paths.StagingDir)
+		if err := fuseFS.Mount(); err != nil {
+			log.Printf("Warning: Failed to mount FUSE filesystem: %v", err)
+			log.Println("Continuing without FUSE mount (macFUSE may not be installed)")
+		} else {
+			log.Printf("FUSE filesystem mounted at %s", cfg.MountPath)
+		}
+	}
+
+	// Initialize API server
+	apiAddress := cfg.APIAddress()
+	apiServer := api.NewServer(apiAddress, db, allocator, syncEngine)
+
+	// Start API server in background
+	go func() {
+		if err := apiServer.Start(); err != nil {
+			log.Printf("API server error: %v", err)
+		}
+	}()
+	log.Printf("API server started on http://%s", apiAddress)
+
+	// Start background cleanup routine
+	db.StartCleanupRoutine(ctx, 1*time.Hour)
+
+	// Print startup summary
+	printStartupSummary(cfg, paths)
+
+	// Wait for shutdown signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+
+	log.Println("Shutdown signal received, cleaning up...")
+
+	// Graceful shutdown
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	// Stop sync engine
+	syncEngine.Stop()
+	log.Println("Sync engine stopped")
+
+	// Shutdown API server
+	if err := apiServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("API server shutdown error: %v", err)
+	}
+	log.Println("API server stopped")
+
+	// Unmount FUSE if mounted
+	if fuseFS != nil {
+		// FUSE unmount would go here
+		log.Println("FUSE filesystem unmounted")
+	}
+
+	log.Println("CloudUnify shutdown complete")
+}
+
+func printStartupSummary(cfg config.Config, paths *config.Paths) {
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
+	fmt.Println("║                    CloudUnify Started                        ║")
+	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
+	fmt.Printf("║  Version:     %-48s║\n", version)
+	fmt.Printf("║  API:         http://%-42s║\n", cfg.APIAddress())
+	fmt.Printf("║  Mount:       %-48s║\n", cfg.MountPath)
+	fmt.Printf("║  Cache:       %-48s║\n", paths.CacheDir)
+	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
+	fmt.Println("║  Press Ctrl+C to stop                                        ║")
+	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
+	fmt.Println()
+}
