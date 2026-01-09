@@ -9,15 +9,36 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	MountPath string      `json:"mount_path"`
-	Cache     CacheConfig `json:"cache"`
-	Sync      SyncConfig  `json:"sync"`
-	API       APIConfig   `json:"api"`
-	Logging   LogConfig   `json:"logging"`
+	MountPath string       `json:"mount_path"`
+	Cache     CacheConfig  `json:"cache"`
+	Sync      SyncConfig   `json:"sync"`
+	API       APIConfig    `json:"api"`
+	Logging   LogConfig    `json:"logging"`
+	OAuth     OAuthConfigs `json:"oauth"`
 
 	// AllocationStrategy determines how files are distributed across providers
 	// Options: "balanced_usage", "most_free_space", "round_robin"
 	AllocationStrategy string `json:"allocation_strategy"`
+}
+
+// OAuthConfigs holds OAuth credentials for all providers
+type OAuthConfigs struct {
+	GoogleDrive OAuthCredentials `json:"google_drive"`
+	OneDrive    OAuthCredentials `json:"onedrive"`
+	ICloud      ICloudConfig     `json:"icloud"`
+}
+
+// OAuthCredentials holds OAuth2 client credentials
+type OAuthCredentials struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	RedirectURL  string `json:"redirect_url"`
+}
+
+// ICloudConfig holds iCloud-specific configuration (uses app-specific password)
+type ICloudConfig struct {
+	Username string `json:"username"`
+	Password string `json:"password"` // App-specific password
 }
 
 // CacheConfig holds cache-related settings
@@ -67,6 +88,22 @@ func DefaultConfig(paths *Paths) *Config {
 		Logging: LogConfig{
 			Level: "info",
 			File:  paths.LogFilePath(),
+		},
+		OAuth: OAuthConfigs{
+			GoogleDrive: OAuthCredentials{
+				ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
+				ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+				RedirectURL:  "http://localhost:8080/api/auth/callback",
+			},
+			OneDrive: OAuthCredentials{
+				ClientID:     os.Getenv("ONEDRIVE_CLIENT_ID"),
+				ClientSecret: os.Getenv("ONEDRIVE_CLIENT_SECRET"),
+				RedirectURL:  "http://localhost:8080/api/auth/callback",
+			},
+			ICloud: ICloudConfig{
+				Username: os.Getenv("ICLOUD_USERNAME"),
+				Password: os.Getenv("ICLOUD_PASSWORD"),
+			},
 		},
 		AllocationStrategy: "balanced_usage",
 	}

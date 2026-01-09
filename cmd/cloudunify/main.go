@@ -14,6 +14,7 @@ import (
 	"cloudunify/internal/config"
 	"cloudunify/internal/database"
 	"cloudunify/internal/fuse"
+	"cloudunify/internal/providers"
 	"cloudunify/internal/storage"
 	"cloudunify/internal/sync"
 )
@@ -72,6 +73,14 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Initialize provider manager with OAuth configs
+	providerManager := providers.NewManager()
+	setupProviderConfigs(providerManager, cfg)
+	log.Println("Provider manager initialized")
+
+	// Log OAuth configuration status
+	logOAuthStatus(cfg)
+
 	// Initialize storage allocator
 	allocator := storage.NewAllocator(db, storage.AllocationStrategy(cfg.AllocationStrategy))
 	log.Println("Storage allocator initialized")
@@ -100,9 +109,9 @@ func main() {
 		}
 	}
 
-	// Initialize API server
+	// Initialize API server with provider manager
 	apiAddress := cfg.APIAddress()
-	apiServer := api.NewServer(apiAddress, db, allocator, syncEngine)
+	apiServer := api.NewServer(apiAddress, db, allocator, syncEngine, providerManager)
 
 	// Start API server in background
 	go func() {
@@ -146,6 +155,50 @@ func main() {
 	}
 
 	log.Println("CloudUnify shutdown complete")
+}
+
+// setupProviderConfigs registers OAuth configs for all provider types
+func setupProviderConfigs(pm *providers.Manager, cfg config.Config) {
+	// Google Drive
+	pm.RegisterConfig("google_drive", &providers.AuthConfig{
+		ClientID:     cfg.OAuth.GoogleDrive.ClientID,
+		ClientSecret: cfg.OAuth.GoogleDrive.ClientSecret,
+		RedirectURL:  cfg.OAuth.GoogleDrive.RedirectURL,
+	})
+
+	// OneDrive
+	pm.RegisterConfig("onedrive", &providers.AuthConfig{
+		ClientID:     cfg.OAuth.OneDrive.ClientID,
+		ClientSecret: cfg.OAuth.OneDrive.ClientSecret,
+		RedirectURL:  cfg.OAuth.OneDrive.RedirectURL,
+	})
+
+	// iCloud (uses app-specific password, not OAuth)
+	pm.RegisterConfig("icloud", &providers.AuthConfig{
+		ClientID:     cfg.OAuth.ICloud.Username,
+		ClientSecret: cfg.OAuth.ICloud.Password,
+	})
+}
+
+// logOAuthStatus logs which OAuth providers are configured
+func logOAuthStatus(cfg config.Config) {
+	if cfg.OAuth.GoogleDrive.ClientID != "" {
+		log.Println("Google Drive OAuth: configured")
+	} else {
+		log.Println("Google Drive OAuth: NOT configured (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)")
+	}
+
+	if cfg.OAuth.OneDrive.ClientID != "" {
+		log.Println("OneDrive OAuth: configured")
+	} else {
+		log.Println("OneDrive OAuth: NOT configured (set ONEDRIVE_CLIENT_ID and ONEDRIVE_CLIENT_SECRET)")
+	}
+
+	if cfg.OAuth.ICloud.Username != "" {
+		log.Println("iCloud: configured")
+	} else {
+		log.Println("iCloud: NOT configured (set ICLOUD_USERNAME and ICLOUD_PASSWORD)")
+	}
 }
 
 func printStartupSummary(cfg config.Config, paths *config.Paths) {

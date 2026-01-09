@@ -11,33 +11,36 @@ import (
 	"github.com/rs/cors"
 
 	"cloudunify/internal/database"
+	"cloudunify/internal/providers"
 	"cloudunify/internal/storage"
 	"cloudunify/internal/sync"
 )
 
 // Server represents the HTTP API server
 type Server struct {
-	router     *mux.Router
-	httpServer *http.Server
-	handlers   *Handlers
-	wsHub      *WSHub
-	db         *database.DB
-	allocator  *storage.Allocator
-	syncEngine *sync.Engine
-	address    string
+	router          *mux.Router
+	httpServer      *http.Server
+	handlers        *Handlers
+	wsHub           *WSHub
+	db              *database.DB
+	allocator       *storage.Allocator
+	syncEngine      *sync.Engine
+	providerManager *providers.Manager
+	address         string
 }
 
 // NewServer creates a new API server
-func NewServer(address string, db *database.DB, allocator *storage.Allocator, syncEngine *sync.Engine) *Server {
+func NewServer(address string, db *database.DB, allocator *storage.Allocator, syncEngine *sync.Engine, providerManager *providers.Manager) *Server {
 	s := &Server{
-		router:     mux.NewRouter(),
-		db:         db,
-		allocator:  allocator,
-		syncEngine: syncEngine,
-		address:    address,
+		router:          mux.NewRouter(),
+		db:              db,
+		allocator:       allocator,
+		syncEngine:      syncEngine,
+		providerManager: providerManager,
+		address:         address,
 	}
 
-	s.handlers = NewHandlers(db, allocator, syncEngine)
+	s.handlers = NewHandlers(db, allocator, syncEngine, providerManager)
 	s.wsHub = NewWSHub()
 
 	s.setupRoutes()
@@ -54,12 +57,18 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/health", s.handlers.HandleHealth).Methods("GET")
 	api.HandleFunc("/version", s.handlers.HandleVersion).Methods("GET")
 
+	// OAuth endpoints
+	api.HandleFunc("/auth/status", s.handlers.HandleOAuthStatus).Methods("GET")
+	api.HandleFunc("/auth/{type}/url", s.handlers.HandleGetAuthURL).Methods("GET")
+	api.HandleFunc("/auth/callback", s.handlers.HandleOAuthCallback).Methods("GET")
+
 	// Provider management
 	api.HandleFunc("/providers", s.handlers.HandleListProviders).Methods("GET")
 	api.HandleFunc("/providers", s.handlers.HandleCreateProvider).Methods("POST")
 	api.HandleFunc("/providers/{id}", s.handlers.HandleGetProvider).Methods("GET")
 	api.HandleFunc("/providers/{id}", s.handlers.HandleDeleteProvider).Methods("DELETE")
 	api.HandleFunc("/providers/{id}/quota", s.handlers.HandleGetProviderQuota).Methods("GET")
+	api.HandleFunc("/providers/{id}/refresh", s.handlers.HandleRefreshToken).Methods("POST")
 
 	// Storage information
 	api.HandleFunc("/storage", s.handlers.HandleGetStorage).Methods("GET")
@@ -67,9 +76,10 @@ func (s *Server) setupRoutes() {
 
 	// File management
 	api.HandleFunc("/files", s.handlers.HandleListFiles).Methods("GET")
+	api.HandleFunc("/files/search", s.handlers.HandleSearchFiles).Methods("POST")
+	api.HandleFunc("/files/upload", s.handlers.HandleUploadFile).Methods("POST")
 	api.HandleFunc("/files/{path:.*}", s.handlers.HandleGetFile).Methods("GET")
 	api.HandleFunc("/files/{path:.*}", s.handlers.HandleDeleteFile).Methods("DELETE")
-	api.HandleFunc("/files/search", s.handlers.HandleSearchFiles).Methods("POST")
 
 	// Sync operations
 	api.HandleFunc("/sync/queue", s.handlers.HandleGetSyncQueue).Methods("GET")
@@ -104,6 +114,11 @@ func (s *Server) Start() error {
 	// Bridge sync events to WebSocket
 	s.wsHub.BridgeSyncEvents(s.syncEngine.Queue())
 
+	// Load existing providers from database
+	if err := s.handlers.LoadProvidersFromDB(); err != nil {
+		log.Printf("Warning: Failed to load providers from database: %v", err)
+	}
+
 	// Create HTTP server
 	s.httpServer = &http.Server{
 		Addr:         s.address,
@@ -136,6 +151,11 @@ func (s *Server) WSHub() *WSHub {
 // Router returns the router for testing
 func (s *Server) Router() *mux.Router {
 	return s.router
+}
+
+// ProviderManager returns the provider manager
+func (s *Server) ProviderManager() *providers.Manager {
+	return s.providerManager
 }
 
 // BroadcastEvent sends an event to all WebSocket clients

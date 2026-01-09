@@ -9,6 +9,29 @@ A cross-platform virtual filesystem that unifies multiple cloud storage provider
 
 ---
 
+## Implementation Status
+
+### ✅ Completed
+- FUSE virtual filesystem mounted at `~/CloudUnify`
+- Drag-and-drop file upload via Finder and terminal
+- Google Drive OAuth 2.0 authentication
+- Multipart upload (≤5MB) and resumable upload (>5MB)
+- Background sync engine (3 upload workers, 5 download workers)
+- SQLite database for metadata
+- REST API on port 8080
+- WebSocket for real-time progress updates
+- React dashboard with Vite
+
+### 🚧 Planned
+- OneDrive integration
+- iCloud integration
+- Download on file read (currently upload-only)
+- Smart file distribution across providers
+- File conflict resolution
+- Cross-platform packaging
+
+---
+
 ## Technical Stack
 
 ### Core Technology

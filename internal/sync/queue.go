@@ -75,6 +75,11 @@ func (q *Queue) Enqueue(ctx context.Context, operation database.SyncOperation, v
 
 // Dequeue gets the next pending item from the queue
 func (q *Queue) Dequeue(ctx context.Context) (*database.SyncQueueItem, error) {
+	return q.DequeueByOperation(ctx, "")
+}
+
+// DequeueByOperation gets the next pending item for a specific operation type
+func (q *Queue) DequeueByOperation(ctx context.Context, operation string) (*database.SyncQueueItem, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -82,7 +87,7 @@ func (q *Queue) Dequeue(ctx context.Context) (*database.SyncQueueItem, error) {
 		return nil, nil
 	}
 
-	item, err := q.db.DequeueSync(ctx)
+	item, err := q.db.DequeueSyncByOperation(ctx, operation)
 	if err != nil {
 		return nil, err
 	}

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { addProvider } from '../services/api';
+import { useState, useEffect } from 'react';
+import { addProvider, getOAuthStatus, getProviders } from '../services/api';
 
 const providerOptions = [
   {
@@ -7,21 +7,21 @@ const providerOptions = [
     name: 'Google Drive',
     icon: '📁',
     description: 'Connect your Google Drive account',
-    quota: '2 TB',
+    quota: '15 GB free',
   },
   {
     type: 'onedrive',
     name: 'OneDrive',
     icon: '☁️',
     description: 'Connect your Microsoft OneDrive account',
-    quota: '1 TB',
+    quota: '5 GB free',
   },
   {
     type: 'icloud',
     name: 'iCloud',
     icon: '🍎',
     description: 'Connect your Apple iCloud account',
-    quota: '2 TB',
+    quota: '5 GB free',
   },
 ];
 
@@ -31,6 +31,76 @@ function SetupWizard({ onComplete }) {
   const [connecting, setConnecting] = useState(false);
   const [connectedProviders, setConnectedProviders] = useState([]);
   const [error, setError] = useState(null);
+  const [oauthStatus, setOauthStatus] = useState({});
+  const [pendingProvider, setPendingProvider] = useState(null);
+
+  // Check OAuth status on mount
+  useEffect(() => {
+    checkOAuthStatus();
+    checkUrlParams();
+    loadExistingProviders();
+  }, []);
+
+  // Poll for OAuth completion when we have a pending provider
+  useEffect(() => {
+    if (pendingProvider) {
+      const interval = setInterval(async () => {
+        try {
+          const response = await getProviders();
+          const providers = response.data;
+          const provider = providers.find(p => p.id === pendingProvider);
+          if (provider && provider.enabled) {
+            setConnectedProviders(prev => [...new Set([...prev, provider.type])]);
+            setPendingProvider(null);
+            setConnecting(false);
+          }
+        } catch (err) {
+          console.error('Failed to check provider status:', err);
+        }
+      }, 2000);
+      return () => clearInterval(interval);
+    }
+  }, [pendingProvider]);
+
+  const checkOAuthStatus = async () => {
+    try {
+      const response = await getOAuthStatus();
+      setOauthStatus(response.data);
+    } catch (err) {
+      console.error('Failed to get OAuth status:', err);
+    }
+  };
+
+  const loadExistingProviders = async () => {
+    try {
+      const response = await getProviders();
+      const providers = response.data;
+      const connected = providers
+        .filter(p => p.enabled || p.is_authenticated)
+        .map(p => p.type);
+      setConnectedProviders(connected);
+    } catch (err) {
+      console.error('Failed to load existing providers:', err);
+    }
+  };
+
+  const checkUrlParams = () => {
+    const params = new URLSearchParams(window.location.search);
+    const success = params.get('success');
+    const errorParam = params.get('error');
+
+    if (success === 'true') {
+      // OAuth was successful, reload providers
+      loadExistingProviders();
+      // Clear URL params
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (errorParam) {
+      const errorDesc = params.get('error_description') || params.get('message') || errorParam;
+      setError(`OAuth error: ${errorDesc}`);
+      // Clear URL params
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  };
 
   const toggleProvider = (type) => {
     setSelectedProviders((prev) =>
@@ -45,17 +115,62 @@ function SetupWizard({ onComplete }) {
     setError(null);
 
     try {
-      const response = await addProvider(type);
-      // In a real app, this would open an OAuth popup
-      // For now, we'll just mark it as connected
-      if (response.data.auth_url) {
-        window.open(response.data.auth_url, '_blank', 'width=600,height=600');
+      // Check if OAuth is configured for this provider
+      if (!oauthStatus[type]?.configured) {
+        setError(`OAuth not configured for ${type}. Please set environment variables.`);
+        setConnecting(false);
+        return;
       }
-      setConnectedProviders((prev) => [...prev, type]);
+
+      // Create provider and get auth URL
+      const response = await addProvider(type);
+      const { provider, auth_url, message } = response.data;
+
+      if (auth_url) {
+        // Store pending provider ID for polling
+        setPendingProvider(provider.id);
+
+        // Open OAuth popup
+        const width = 600;
+        const height = 700;
+        const left = window.screenX + (window.outerWidth - width) / 2;
+        const top = window.screenY + (window.outerHeight - height) / 2;
+
+        const popup = window.open(
+          auth_url,
+          'oauth_popup',
+          `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no`
+        );
+
+        // Check if popup was blocked
+        if (!popup || popup.closed) {
+          setError('Popup was blocked. Please allow popups for this site and try again.');
+          setConnecting(false);
+          setPendingProvider(null);
+          return;
+        }
+
+        // Monitor popup close
+        const checkPopup = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(checkPopup);
+            // The polling effect will handle checking for success
+          }
+        }, 500);
+      } else if (message) {
+        // OAuth not available, show message
+        setError(message);
+        setConnecting(false);
+      } else {
+        // Provider created but no auth needed (e.g., iCloud with credentials in env)
+        setConnectedProviders((prev) => [...prev, type]);
+        setConnecting(false);
+      }
     } catch (err) {
-      setError(`Failed to connect ${type}: ${err.message}`);
-    } finally {
+      const errorMessage = err.response?.data?.error?.message || err.message;
+      setError(`Failed to connect ${type}: ${errorMessage}`);
       setConnecting(false);
+      setPendingProvider(null);
     }
   };
 
@@ -69,6 +184,10 @@ function SetupWizard({ onComplete }) {
 
   const handleComplete = () => {
     onComplete();
+  };
+
+  const isProviderConfigured = (type) => {
+    return oauthStatus[type]?.configured !== false;
   };
 
   return (
@@ -90,33 +209,43 @@ function SetupWizard({ onComplete }) {
           <p>Choose which services you want to unify</p>
 
           <div className="provider-options">
-            {providerOptions.map((provider) => (
-              <div
-                key={provider.type}
-                className={`provider-option ${selectedProviders.includes(provider.type) ? 'selected' : ''
-                  }`}
-                onClick={() => toggleProvider(provider.type)}
-              >
-                <span className="provider-icon">{provider.icon}</span>
-                <div className="provider-details">
-                  <h3>{provider.name}</h3>
-                  <p>{provider.description}</p>
-                  <span className="quota-badge">{provider.quota}</span>
+            {providerOptions.map((provider) => {
+              const isConfigured = isProviderConfigured(provider.type);
+              const isConnected = connectedProviders.includes(provider.type);
+
+              return (
+                <div
+                  key={provider.type}
+                  className={`provider-option ${selectedProviders.includes(provider.type) ? 'selected' : ''} ${!isConfigured ? 'disabled' : ''} ${isConnected ? 'connected' : ''}`}
+                  onClick={() => !isConnected && isConfigured && toggleProvider(provider.type)}
+                >
+                  <span className="provider-icon">{provider.icon}</span>
+                  <div className="provider-details">
+                    <h3>{provider.name}</h3>
+                    <p>{provider.description}</p>
+                    <span className="quota-badge">{provider.quota}</span>
+                    {!isConfigured && (
+                      <span className="not-configured">OAuth not configured</span>
+                    )}
+                    {isConnected && (
+                      <span className="already-connected">Already connected</span>
+                    )}
+                  </div>
+                  <div className="checkbox">
+                    {isConnected ? '✓' : selectedProviders.includes(provider.type) ? '✓' : ''}
+                  </div>
                 </div>
-                <div className="checkbox">
-                  {selectedProviders.includes(provider.type) ? '✓' : ''}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="wizard-actions">
             <button
               className="btn btn-primary"
               onClick={handleNext}
-              disabled={selectedProviders.length === 0}
+              disabled={selectedProviders.length === 0 && connectedProviders.length === 0}
             >
-              Continue
+              {connectedProviders.length > 0 && selectedProviders.length === 0 ? 'Continue with existing' : 'Continue'}
             </button>
           </div>
         </div>
@@ -133,6 +262,7 @@ function SetupWizard({ onComplete }) {
             {selectedProviders.map((type) => {
               const provider = providerOptions.find((p) => p.type === type);
               const isConnected = connectedProviders.includes(type);
+              const isPending = pendingProvider && connecting;
 
               return (
                 <div key={type} className="connect-item">
@@ -146,7 +276,7 @@ function SetupWizard({ onComplete }) {
                       onClick={() => connectProvider(type)}
                       disabled={connecting}
                     >
-                      {connecting ? 'Connecting...' : 'Connect'}
+                      {isPending ? 'Waiting for auth...' : connecting ? 'Connecting...' : 'Connect'}
                     </button>
                   )}
                 </div>
@@ -161,9 +291,9 @@ function SetupWizard({ onComplete }) {
             <button
               className="btn btn-primary"
               onClick={handleNext}
-              disabled={connectedProviders.length === 0}
+              disabled={connectedProviders.length === 0 && selectedProviders.some(t => !connectedProviders.includes(t))}
             >
-              Continue
+              {connectedProviders.length > 0 ? 'Continue' : 'Skip for now'}
             </button>
           </div>
         </div>
@@ -178,19 +308,27 @@ function SetupWizard({ onComplete }) {
             <code>~/CloudUnify</code>
           </p>
 
-          <div className="summary">
-            <h3>Connected Providers</h3>
-            <ul>
-              {connectedProviders.map((type) => {
-                const provider = providerOptions.find((p) => p.type === type);
-                return (
-                  <li key={type}>
-                    {provider.icon} {provider.name}
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
+          {connectedProviders.length > 0 && (
+            <div className="summary">
+              <h3>Connected Providers</h3>
+              <ul>
+                {connectedProviders.map((type) => {
+                  const provider = providerOptions.find((p) => p.type === type);
+                  return provider ? (
+                    <li key={type}>
+                      {provider.icon} {provider.name}
+                    </li>
+                  ) : null;
+                })}
+              </ul>
+            </div>
+          )}
+
+          {connectedProviders.length === 0 && (
+            <div className="summary warning">
+              <p>No providers connected yet. You can add them later from Settings.</p>
+            </div>
+          )}
 
           <div className="wizard-actions">
             <button className="btn btn-primary" onClick={handleComplete}>

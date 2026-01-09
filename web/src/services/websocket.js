@@ -1,4 +1,5 @@
-const WS_URL = 'ws://localhost:8080/ws';
+// Use relative URL for WebSocket - will be proxied by Vite in dev
+const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
 
 class WebSocketService {
   constructor() {

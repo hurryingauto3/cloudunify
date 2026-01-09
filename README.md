@@ -1,38 +1,52 @@
 # CloudUnify
 
-A unified cloud storage system that mounts multiple cloud providers (Google Drive, OneDrive, iCloud) as a single virtual filesystem.
+A unified cloud storage system that mounts multiple cloud providers (Google Drive, OneDrive, iCloud) as a single virtual filesystem at `~/CloudUnify`. Simply drag-and-drop files into the folder and they automatically sync to the cloud.
+
+## Features
+
+- 🗂️ **Unified Mount Point** - All cloud storage appears as a single `~/CloudUnify` folder
+- 📤 **Drag-and-Drop Upload** - Copy files via Finder or terminal, they upload automatically
+- ☁️ **Google Drive Integration** - OAuth 2.0 with resumable uploads for large files
+- 🔄 **Background Sync** - Multi-worker queue with retry logic
+- 📊 **Web Dashboard** - Real-time progress, storage visualization
+- 🖥️ **Native Performance** - FUSE-based with local staging for fast writes
 
 ## Prerequisites
 
 - **Go 1.21+** - `brew install go`
 - **Node.js 18+** - `brew install node`
-- **macFUSE** (for mounting virtual filesystem) - `brew install --cask macfuse`
+- **macFUSE** - `brew install --cask macfuse`
   - After installation, approve the kernel extension in System Settings > Privacy & Security
-  - Restart your Mac
+  - **Restart your Mac**
 
 ## Quick Start
 
-### 1. Build the Backend
+### 1. Configure Google Drive OAuth
+
+Create `~/.cloudunify.env` or set environment variables:
+```bash
+export GOOGLE_CLIENT_ID="your-client-id"
+export GOOGLE_CLIENT_SECRET="your-client-secret"
+```
+
+### 2. Build & Run
 
 ```bash
-# From the project root
+# Build the backend
 make build
-```
 
-Or manually:
-```bash
-go build -o bin/cloudunify ./cmd/cloudunify
-```
-
-### 2. Run the Backend
-
-```bash
+# Run CloudUnify
 ./bin/cloudunify
 ```
 
-The API server will start on `http://localhost:8080`
+### 3. Authenticate
 
-### 3. Run the Frontend (Development)
+1. Open `http://localhost:8080` in your browser
+2. Click "Add Provider" → "Google Drive"
+3. Complete OAuth authentication
+4. Start copying files to `~/CloudUnify`!
+
+### 4. Optional: Web Dashboard
 
 ```bash
 cd web
@@ -40,18 +54,26 @@ npm install
 npm run dev
 ```
 
-The web UI will be available at `http://localhost:5173`
+Access the dashboard at `http://localhost:5173`
 
-## Available Commands
+## Usage
 
-### Makefile Targets
-
+### Copy Files via Terminal
 ```bash
-make build       # Build the backend binary
-make build-dev   # Build with debug symbols
-make run         # Build and run the backend
-make clean       # Remove build artifacts
-make test        # Run tests
+cp ~/Downloads/video.mp4 ~/CloudUnify/
+ls -la ~/CloudUnify/
+```
+
+### Copy Files via Finder
+Simply drag and drop files into the `~/CloudUnify` folder in Finder.
+
+### Check Upload Status
+```bash
+# View sync queue
+curl http://localhost:8080/api/sync/queue | jq
+
+# View all files
+curl http://localhost:8080/api/files | jq
 ```
 
 ## API Endpoints
@@ -62,10 +84,11 @@ make test        # Run tests
 | `/api/providers` | GET | List connected providers |
 | `/api/providers` | POST | Add a new provider |
 | `/api/providers/:id` | DELETE | Remove a provider |
-| `/api/storage` | GET | Get storage statistics |
-| `/api/files` | GET | List files in directory |
+| `/api/files` | GET | List all synced files |
+| `/api/files/upload` | POST | Direct file upload |
 | `/api/sync/queue` | GET | Get sync queue status |
-| `/ws` | WebSocket | Real-time updates |
+| `/api/oauth/google/start` | GET | Start Google OAuth flow |
+| `/ws` | WebSocket | Real-time sync updates |
 
 ## Project Structure
 
@@ -76,10 +99,10 @@ cloud-storage-sync/
 │   ├── api/              # HTTP API server & WebSocket
 │   ├── config/           # Configuration management
 │   ├── database/         # SQLite database layer
-│   ├── fuse/             # Virtual filesystem (FUSE)
+│   ├── fuse/             # FUSE virtual filesystem
 │   ├── providers/        # Cloud provider implementations
 │   ├── storage/          # Storage allocation strategy
-│   └── sync/             # Sync engine & queue
+│   └── sync/             # Background sync engine
 ├── web/                  # React frontend (Vite)
 ├── bin/                  # Compiled binaries
 └── Makefile
@@ -87,10 +110,11 @@ cloud-storage-sync/
 
 ## Configuration
 
-Configuration is stored in:
-- **macOS**: `~/Library/Application Support/CloudUnify/config.json`
-- **Linux**: `~/.config/cloudunify/config.json`
-- **Windows**: `%APPDATA%\CloudUnify\config.json`
+Configuration stored at `~/Library/Application Support/CloudUnify/`:
+- `config.json` - Settings and OAuth tokens
+- `cloudunify.db` - SQLite metadata database
+
+Cache/staging at `~/Library/Caches/CloudUnify/staging/`
 
 ### Default Settings
 
@@ -103,11 +127,9 @@ Configuration is stored in:
   },
   "sync": {
     "upload_workers": 3,
-    "download_workers": 5,
-    "auto_sync": true
+    "download_workers": 5
   },
   "api": {
-    "host": "localhost",
     "port": 8080
   }
 }
@@ -115,14 +137,14 @@ Configuration is stored in:
 
 ## Development
 
-### Backend Development
+### Build Commands
 
 ```bash
-# Run with hot reload (using air or similar)
-make run
-
-# Run tests
-go test ./...
+make build       # Build the backend binary
+make build-dev   # Build with debug symbols
+make run         # Build and run the backend
+make clean       # Remove build artifacts
+make test        # Run tests
 ```
 
 ### Frontend Development
@@ -131,14 +153,38 @@ go test ./...
 cd web
 npm run dev      # Start dev server with HMR
 npm run build    # Build for production
-npm run preview  # Preview production build
 ```
 
-## Notes
+## Troubleshooting
 
-- **macFUSE** requires a system restart after installation
-- OAuth credentials for cloud providers need to be configured for production use
-- The first pass implements a working skeleton - provider authentication uses mock tokens
+### "Mount point busy" error
+```bash
+umount ~/CloudUnify  # or: diskutil unmount force ~/CloudUnify
+```
+
+### Files not uploading
+1. Check provider is registered: `curl http://localhost:8080/api/providers`
+2. Check sync queue: `curl http://localhost:8080/api/sync/queue`
+3. Check logs: `cat /tmp/cloudunify.log`
+
+### OAuth errors
+Ensure `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set before starting.
+
+## Current Status
+
+✅ **Working:**
+- FUSE filesystem mount at ~/CloudUnify
+- Drag-and-drop file upload via Finder
+- Terminal file copy (`cp`)
+- Google Drive OAuth & upload
+- Background sync with progress
+- Web dashboard
+
+🚧 **Planned:**
+- OneDrive integration
+- iCloud integration
+- Smart file distribution
+- Download on read
 
 ## License
 

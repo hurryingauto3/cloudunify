@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8080/api';
+// Use relative URL so Vite proxy works in dev, and absolute in production
+const API_BASE_URL = '/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -11,10 +12,17 @@ const api = axios.create({
 
 // Provider endpoints
 export const getProviders = () => api.get('/providers');
-export const addProvider = (type) => api.post('/providers', { type });
+export const addProvider = (type, name = '') => api.post('/providers', { type, name: name || type });
 export const deleteProvider = (id) => api.delete(`/providers/${id}`);
 export const getProviderQuota = (id) => api.get(`/providers/${id}/quota`);
 export const refreshProviderToken = (id) => api.post(`/providers/${id}/refresh`);
+
+// OAuth endpoints
+export const getOAuthStatus = () => api.get('/auth/status');
+export const getAuthURL = (providerType, providerId = null) => {
+  const params = providerId ? `?provider_id=${providerId}` : '';
+  return api.get(`/auth/${providerType}/url${params}`);
+};
 
 // Storage endpoints
 export const getStorageStats = () => api.get('/storage');

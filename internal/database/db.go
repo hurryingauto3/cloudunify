@@ -318,6 +318,11 @@ func (db *DB) EnqueueSync(ctx context.Context, item *SyncQueueItem) error {
 
 // DequeueSync gets the next pending item from the queue
 func (db *DB) DequeueSync(ctx context.Context) (*SyncQueueItem, error) {
+	return db.DequeueSyncByOperation(ctx, "")
+}
+
+// DequeueSyncByOperation gets the next pending item for a specific operation
+func (db *DB) DequeueSyncByOperation(ctx context.Context, operation string) (*SyncQueueItem, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -325,13 +330,29 @@ func (db *DB) DequeueSync(ctx context.Context) (*SyncQueueItem, error) {
 	defer tx.Rollback()
 
 	var item SyncQueueItem
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, operation, virtual_path, local_path, provider_id, priority, status, progress_percent, error_message, retry_count, created_at, updated_at
-		FROM sync_queue
-		WHERE status = 'pending'
-		ORDER BY priority DESC, created_at ASC
-		LIMIT 1
-	`).Scan(&item.ID, &item.Operation, &item.VirtualPath, &item.LocalPath, &item.ProviderID, &item.Priority, &item.Status, &item.ProgressPercent, &item.ErrorMessage, &item.RetryCount, &item.CreatedAt, &item.UpdatedAt)
+	var query string
+	var args []interface{}
+	
+	if operation != "" {
+		query = `
+			SELECT id, operation, virtual_path, local_path, provider_id, priority, status, progress_percent, COALESCE(error_message, ''), retry_count, created_at, updated_at
+			FROM sync_queue
+			WHERE status = 'pending' AND operation = ?
+			ORDER BY priority DESC, created_at ASC
+			LIMIT 1
+		`
+		args = []interface{}{operation}
+	} else {
+		query = `
+			SELECT id, operation, virtual_path, local_path, provider_id, priority, status, progress_percent, COALESCE(error_message, ''), retry_count, created_at, updated_at
+			FROM sync_queue
+			WHERE status = 'pending'
+			ORDER BY priority DESC, created_at ASC
+			LIMIT 1
+		`
+	}
+	
+	err = tx.QueryRowContext(ctx, query, args...).Scan(&item.ID, &item.Operation, &item.VirtualPath, &item.LocalPath, &item.ProviderID, &item.Priority, &item.Status, &item.ProgressPercent, &item.ErrorMessage, &item.RetryCount, &item.CreatedAt, &item.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -402,7 +423,7 @@ func (db *DB) RetryFailedSync(ctx context.Context, id int64) error {
 // ListSyncQueue returns items in the sync queue
 func (db *DB) ListSyncQueue(ctx context.Context, status SyncStatus) ([]*SyncQueueItem, error) {
 	query := `
-		SELECT id, operation, virtual_path, local_path, provider_id, priority, status, progress_percent, error_message, retry_count, created_at, updated_at
+		SELECT id, operation, virtual_path, local_path, provider_id, priority, status, progress_percent, COALESCE(error_message, ''), retry_count, created_at, updated_at
 		FROM sync_queue
 	`
 	var args []interface{}

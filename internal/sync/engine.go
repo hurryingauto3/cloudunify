@@ -128,7 +128,7 @@ func (e *Engine) uploadWorker(id int) {
 			log.Printf("Upload worker %d stopping", id)
 			return
 		default:
-			item, err := e.queue.Dequeue(e.ctx)
+			item, err := e.queue.DequeueByOperation(e.ctx, string(database.SyncOpUpload))
 			if err != nil {
 				log.Printf("Upload worker %d error: %v", id, err)
 				time.Sleep(time.Second)
@@ -137,12 +137,6 @@ func (e *Engine) uploadWorker(id int) {
 
 			if item == nil {
 				time.Sleep(500 * time.Millisecond)
-				continue
-			}
-
-			if item.Operation != database.SyncOpUpload {
-				// Put it back for the correct worker
-				e.queue.Fail(e.ctx, item.ID, "wrong worker type")
 				continue
 			}
 
@@ -162,7 +156,8 @@ func (e *Engine) downloadWorker(id int) {
 			log.Printf("Download worker %d stopping", id)
 			return
 		default:
-			item, err := e.queue.Dequeue(e.ctx)
+			// Download workers handle download and delete operations
+			item, err := e.queue.DequeueByOperation(e.ctx, string(database.SyncOpDownload))
 			if err != nil {
 				log.Printf("Download worker %d error: %v", id, err)
 				time.Sleep(time.Second)
@@ -170,13 +165,17 @@ func (e *Engine) downloadWorker(id int) {
 			}
 
 			if item == nil {
-				time.Sleep(500 * time.Millisecond)
-				continue
+				// Also check for delete operations
+				item, err = e.queue.DequeueByOperation(e.ctx, string(database.SyncOpDelete))
+				if err != nil {
+					log.Printf("Download worker %d error: %v", id, err)
+					time.Sleep(time.Second)
+					continue
+				}
 			}
 
-			if item.Operation == database.SyncOpUpload {
-				// Put it back for upload workers
-				e.queue.Fail(e.ctx, item.ID, "wrong worker type")
+			if item == nil {
+				time.Sleep(500 * time.Millisecond)
 				continue
 			}
 
@@ -259,8 +258,27 @@ func (e *Engine) processUpload(item *database.SyncQueueItem) {
 		Status:      database.FileStatusSynced,
 	}
 
+	log.Printf("Upload metadata: ID=%s, Size=%d, MimeType=%s", metadata.ID, metadata.Size, metadata.MimeType)
+
+	// Try to create, or update if file already exists
 	if err := e.db.CreateFile(e.ctx, dbFile); err != nil {
-		log.Printf("Warning: failed to create file record: %v", err)
+		// Check if file already exists
+		existingFile, _ := e.db.GetFileByPath(e.ctx, item.VirtualPath)
+		if existingFile != nil {
+			// Update existing record
+			existingFile.CloudFileID = metadata.ID
+			existingFile.CloudPath = metadata.Path
+			existingFile.SizeBytes = metadata.Size
+			existingFile.Checksum = metadata.Checksum
+			existingFile.MimeType = metadata.MimeType
+			existingFile.Status = database.FileStatusSynced
+			log.Printf("Updating existing file record: %s with size %d", existingFile.VirtualPath, existingFile.SizeBytes)
+			if err := e.db.UpdateFile(e.ctx, existingFile); err != nil {
+				log.Printf("Warning: failed to update file record: %v", err)
+			}
+		} else {
+			log.Printf("Warning: failed to create file record: %v", err)
+		}
 	}
 
 	// Update provider usage
