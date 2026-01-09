@@ -59,7 +59,6 @@ function FileBrowser() {
       navigateTo(file.virtual_path);
     } else {
       // TODO: Open file preview or download
-      console.log('Open file:', file);
     }
   };
 

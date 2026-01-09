@@ -60,18 +60,25 @@ func respondError(w http.ResponseWriter, status int, code, message string) {
 
 // Health check handler
 func (h *Handlers) HandleHealth(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"status":  "healthy",
-		"version": "0.1.0",
+	respondJSON(w, http.StatusOK, struct {
+		Status  string `json:"status"`
+		Version string `json:"version"`
+	}{
+		Status:  "healthy",
+		Version: "0.1.0",
 	})
 }
 
 // HandleVersion returns version information
 func (h *Handlers) HandleVersion(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"version":    "0.1.0",
-		"go_version": "1.21+",
-		"build_time": "development",
+	respondJSON(w, http.StatusOK, struct {
+		Version   string `json:"version"`
+		GoVersion string `json:"go_version"`
+		BuildTime string `json:"build_time"`
+	}{
+		Version:   "0.1.0",
+		GoVersion: "1.21+",
+		BuildTime: "development",
 	})
 }
 
@@ -131,9 +138,12 @@ func (h *Handlers) HandleGetProvider(w http.ResponseWriter, r *http.Request) {
 		isAuth = p.IsAuthenticated()
 	}
 
-	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"provider":         provider,
-		"is_authenticated": isAuth,
+	respondJSON(w, http.StatusOK, struct {
+		Provider        *database.Provider `json:"provider"`
+		IsAuthenticated bool               `json:"is_authenticated"`
+	}{
+		Provider:        provider,
+		IsAuthenticated: isAuth,
 	})
 }
 
@@ -194,17 +204,24 @@ func (h *Handlers) HandleCreateProvider(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		log.Printf("Failed to start OAuth: %v", err)
 		// Still return success but without auth_url
-		respondJSON(w, http.StatusCreated, map[string]interface{}{
-			"provider": provider,
-			"message":  "Provider created, OAuth not available: " + err.Error(),
+		respondJSON(w, http.StatusCreated, struct {
+			Provider *database.Provider `json:"provider"`
+			Message  string             `json:"message"`
+		}{
+			Provider: provider,
+			Message:  "Provider created, OAuth not available: " + err.Error(),
 		})
 		return
 	}
 
-	respondJSON(w, http.StatusCreated, map[string]interface{}{
-		"provider": provider,
-		"auth_url": authURL,
-		"state":    state,
+	respondJSON(w, http.StatusCreated, struct {
+		Provider *database.Provider `json:"provider"`
+		AuthURL  string             `json:"auth_url"`
+		State    string             `json:"state"`
+	}{
+		Provider: provider,
+		AuthURL:  authURL,
+		State:    state,
 	})
 }
 
@@ -495,8 +512,18 @@ func (h *Handlers) HandleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Queue delete operation
-	if _, err := h.syncEngine.EnqueueDelete(r.Context(), path, 0); err != nil {
+	// Capture file info before deletion
+	cloudFileID := file.CloudFileID
+	providerID := file.ProviderID
+
+	// Delete from database immediately
+	if err := h.db.DeleteFile(r.Context(), file.ID); err != nil {
+		respondError(w, http.StatusInternalServerError, "DB_ERROR", "Failed to delete file record")
+		return
+	}
+
+	// Queue cloud delete operation with file info
+	if _, err := h.syncEngine.EnqueueDelete(r.Context(), path, cloudFileID, providerID, 0); err != nil {
 		respondError(w, http.StatusInternalServerError, "SYNC_ERROR", "Failed to queue delete")
 		return
 	}

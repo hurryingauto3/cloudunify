@@ -1,0 +1,80 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go build artifacts
+*.o
+*.a
+*.test
+*.out
+go.work
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+
+# Node.js / React frontend
+web/node_modules/
+web/dist/
+web/build/
+web/.env
+web/.env.local
+web/.env.*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Application data (local development)
+# These are created at runtime in ~/Library/Application Support/CloudUnify/
+# and ~/Library/Caches/CloudUnify/ so not in repo, but just in case:
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+staging/
+
+# Test files
+*.test.bin
+coverage/
+*.cover
+*.prof
+
+# Logs
+*.log
+logs/
+
+# Environment and secrets
+.env
+.env.local
+*.pem
+*.key
+credentials.json
+token.json
+
+# Temporary files
+tmp/
+temp/
+*.tmp

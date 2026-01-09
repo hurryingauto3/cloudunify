@@ -332,7 +332,7 @@ func (db *DB) DequeueSyncByOperation(ctx context.Context, operation string) (*Sy
 	var item SyncQueueItem
 	var query string
 	var args []interface{}
-	
+
 	if operation != "" {
 		query = `
 			SELECT id, operation, virtual_path, local_path, provider_id, priority, status, progress_percent, COALESCE(error_message, ''), retry_count, created_at, updated_at
@@ -351,7 +351,7 @@ func (db *DB) DequeueSyncByOperation(ctx context.Context, operation string) (*Sy
 			LIMIT 1
 		`
 	}
-	
+
 	err = tx.QueryRowContext(ctx, query, args...).Scan(&item.ID, &item.Operation, &item.VirtualPath, &item.LocalPath, &item.ProviderID, &item.Priority, &item.Status, &item.ProgressPercent, &item.ErrorMessage, &item.RetryCount, &item.CreatedAt, &item.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil

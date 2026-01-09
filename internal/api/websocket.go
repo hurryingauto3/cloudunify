@@ -158,7 +158,6 @@ func (c *WSClient) readPump() {
 		// Handle incoming messages if needed
 		var msg map[string]interface{}
 		if err := json.Unmarshal(message, &msg); err == nil {
-			log.Printf("Received WebSocket message: %v", msg)
 			// Handle different message types here
 		}
 	}

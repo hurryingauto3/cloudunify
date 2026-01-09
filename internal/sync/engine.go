@@ -17,20 +17,20 @@ import (
 
 // Engine coordinates sync operations between local filesystem and cloud providers
 type Engine struct {
-	db           *database.DB
-	queue        *Queue
-	allocator    *storage.Allocator
-	providers    map[int64]providers.CloudProvider
-	providersMu  sync.RWMutex
+	db          *database.DB
+	queue       *Queue
+	allocator   *storage.Allocator
+	providers   map[int64]providers.CloudProvider
+	providersMu sync.RWMutex
 
 	uploadWorkers   int
 	downloadWorkers int
 
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	running    bool
-	runningMu  sync.Mutex
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	running   bool
+	runningMu sync.Mutex
 }
 
 // NewEngine creates a new sync engine
@@ -191,8 +191,6 @@ func (e *Engine) downloadWorker(id int) {
 
 // processUpload handles a single upload job
 func (e *Engine) processUpload(item *database.SyncQueueItem) {
-	log.Printf("Processing upload: %s", item.VirtualPath)
-
 	// Get file info
 	fileInfo, err := os.Stat(item.LocalPath)
 	if err != nil {
@@ -258,8 +256,6 @@ func (e *Engine) processUpload(item *database.SyncQueueItem) {
 		Status:      database.FileStatusSynced,
 	}
 
-	log.Printf("Upload metadata: ID=%s, Size=%d, MimeType=%s", metadata.ID, metadata.Size, metadata.MimeType)
-
 	// Try to create, or update if file already exists
 	if err := e.db.CreateFile(e.ctx, dbFile); err != nil {
 		// Check if file already exists
@@ -291,8 +287,6 @@ func (e *Engine) processUpload(item *database.SyncQueueItem) {
 
 // processDownload handles a single download job
 func (e *Engine) processDownload(item *database.SyncQueueItem) {
-	log.Printf("Processing download: %s", item.VirtualPath)
-
 	// Get file record
 	file, err := e.db.GetFileByPath(e.ctx, item.VirtualPath)
 	if err != nil || file == nil {
@@ -346,30 +340,31 @@ func (e *Engine) processDownload(item *database.SyncQueueItem) {
 
 // processDelete handles a single delete job
 func (e *Engine) processDelete(item *database.SyncQueueItem) {
-	log.Printf("Processing delete: %s", item.VirtualPath)
-
-	// Get file record
-	file, err := e.db.GetFileByPath(e.ctx, item.VirtualPath)
-	if err != nil {
-		e.queue.Fail(e.ctx, item.ID, fmt.Sprintf("failed to get file: %v", err))
-		return
-	}
-
-	if file == nil {
-		// File doesn't exist, consider it deleted
+	// CloudFileID is stored in LocalPath for delete operations
+	cloudFileID := item.LocalPath
+	if cloudFileID == "" {
+		log.Printf("Delete: no cloud file ID, skipping cloud delete")
 		e.queue.Complete(e.ctx, item.ID)
 		return
 	}
 
+	// Get provider ID from queue item
+	if !item.ProviderID.Valid {
+		log.Printf("Delete: no provider ID, skipping cloud delete")
+		e.queue.Complete(e.ctx, item.ID)
+		return
+	}
+	providerID := item.ProviderID.Int64
+
 	// Get provider instance
-	provider, ok := e.GetProvider(file.ProviderID)
+	provider, ok := e.GetProvider(providerID)
 	if !ok {
 		e.queue.Fail(e.ctx, item.ID, "provider not registered")
 		return
 	}
 
 	// Delete from cloud
-	if err := provider.Delete(e.ctx, file.CloudFileID); err != nil {
+	if err := provider.Delete(e.ctx, cloudFileID); err != nil {
 		if providers.IsRetriableError(err) && item.RetryCount < 3 {
 			e.queue.Fail(e.ctx, item.ID, fmt.Sprintf("delete failed (will retry): %v", err))
 			e.queue.Retry(e.ctx, item.ID)
@@ -379,16 +374,8 @@ func (e *Engine) processDelete(item *database.SyncQueueItem) {
 		return
 	}
 
-	// Update provider usage
-	e.allocator.UpdateUsage(e.ctx, file.ProviderID, -file.SizeBytes)
-
-	// Delete file record
-	if err := e.db.DeleteFile(e.ctx, file.ID); err != nil {
-		log.Printf("Warning: failed to delete file record: %v", err)
-	}
-
 	e.queue.Complete(e.ctx, item.ID)
-	log.Printf("Delete complete: %s", item.VirtualPath)
+	log.Printf("Delete complete: %s (cloud file: %s)", item.VirtualPath, cloudFileID)
 }
 
 // EnqueueUpload adds an upload job to the queue
@@ -402,8 +389,11 @@ func (e *Engine) EnqueueDownload(ctx context.Context, virtualPath, localPath str
 }
 
 // EnqueueDelete adds a delete job to the queue
-func (e *Engine) EnqueueDelete(ctx context.Context, virtualPath string, priority int) (*database.SyncQueueItem, error) {
-	return e.queue.Enqueue(ctx, database.SyncOpDelete, virtualPath, "", nil, priority)
+// cloudFileID is the ID of the file in the cloud provider
+// providerID is the database ID of the provider
+func (e *Engine) EnqueueDelete(ctx context.Context, virtualPath, cloudFileID string, providerID int64, priority int) (*database.SyncQueueItem, error) {
+	// Store cloudFileID in LocalPath field (repurposed for delete operations)
+	return e.queue.Enqueue(ctx, database.SyncOpDelete, virtualPath, cloudFileID, &providerID, priority)
 }
 
 // IsRunning returns whether the engine is running

@@ -92,7 +92,7 @@ func (fs *CloudUnifyFS) Statfs(path string, stat *fuse.Statfs_t) int {
 
 	// Block size of 4KB
 	blockSize := int64(4096)
-	
+
 	stat.Bsize = uint64(blockSize)
 	stat.Frsize = uint64(blockSize)
 	stat.Blocks = uint64(summary.TotalBytes / blockSize)
@@ -301,8 +301,6 @@ func (fs *CloudUnifyFS) Rmdir(path string) int {
 
 // Create creates a new file
 func (fs *CloudUnifyFS) Create(path string, flags int, mode uint32) (int, uint64) {
-	log.Printf("FUSE Create: %s", path)
-	
 	// Create staging file
 	stagingPath := fs.getStagingPath(path)
 	if err := os.MkdirAll(filepath.Dir(stagingPath), 0755); err != nil {
@@ -338,16 +336,12 @@ func (fs *CloudUnifyFS) Create(path string, flags int, mode uint32) (int, uint64
 
 // Open opens a file
 func (fs *CloudUnifyFS) Open(path string, flags int) (int, uint64) {
-	log.Printf("FUSE Open: %s, flags=%d", path, flags)
-	
 	// Check if this is a write operation
 	isWrite := (flags & (fuse.O_WRONLY | fuse.O_RDWR | fuse.O_CREAT | fuse.O_TRUNC)) != 0
-	
+
 	// First check if file is in staging directory (recently uploaded or pending)
 	stagingPath := fs.getStagingPath(path)
 	if _, err := os.Stat(stagingPath); err == nil {
-		log.Printf("FUSE Open: found in staging: %s, isWrite=%v", stagingPath, isWrite)
-		
 		var f *os.File
 		var err error
 		if isWrite {
@@ -359,7 +353,7 @@ func (fs *CloudUnifyFS) Open(path string, flags int) (int, uint64) {
 			log.Printf("FUSE Open: error opening staging file: %v", err)
 			return -fuse.EIO, 0
 		}
-		
+
 		// Track as pending file if this is a write (overwriting)
 		if isWrite {
 			fs.pendingFilesMu.Lock()
@@ -371,7 +365,7 @@ func (fs *CloudUnifyFS) Open(path string, flags int) (int, uint64) {
 			}
 			fs.pendingFilesMu.Unlock()
 		}
-		
+
 		handle := &FileHandle{
 			Path:     path,
 			File:     f,
@@ -380,21 +374,20 @@ func (fs *CloudUnifyFS) Open(path string, flags int) (int, uint64) {
 		fh := fs.allocHandle(handle)
 		return 0, fh
 	}
-	
+
 	// If this is a write operation and file isn't in staging, create it
 	if isWrite {
-		log.Printf("FUSE Open: creating staging file for write: %s", path)
 		if err := os.MkdirAll(filepath.Dir(stagingPath), 0755); err != nil {
 			log.Printf("Open error creating staging dir: %v", err)
 			return -fuse.EIO, 0
 		}
-		
+
 		f, err := os.OpenFile(stagingPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 		if err != nil {
 			log.Printf("Open error creating staging file: %v", err)
 			return -fuse.EIO, 0
 		}
-		
+
 		// Track as pending file
 		fs.pendingFilesMu.Lock()
 		fs.pendingFiles[path] = &PendingFile{
@@ -404,7 +397,7 @@ func (fs *CloudUnifyFS) Open(path string, flags int) (int, uint64) {
 			CreatedAt:   time.Now(),
 		}
 		fs.pendingFilesMu.Unlock()
-		
+
 		handle := &FileHandle{
 			Path:     path,
 			File:     f,
@@ -469,7 +462,6 @@ func (fs *CloudUnifyFS) Read(path string, buff []byte, ofst int64, fh uint64) in
 	if handle.File == nil {
 		// File not yet downloaded - return 0 for now
 		// In a full implementation, this would block and download
-		log.Printf("Read: file not cached, would download: %s", path)
 		return 0
 	}
 
@@ -525,7 +517,6 @@ func (fs *CloudUnifyFS) Release(path string, fh uint64) int {
 				if info, err := os.Stat(stagingPath); err == nil {
 					pending.Size = info.Size()
 				}
-				log.Printf("FUSE queuing upload: %s -> %s (size: %d)", path, stagingPath, pending.Size)
 				fs.syncEngine.EnqueueUpload(fs.ctx, path, stagingPath, 0)
 			}
 			fs.pendingFilesMu.Unlock()
@@ -538,17 +529,52 @@ func (fs *CloudUnifyFS) Release(path string, fh uint64) int {
 
 // Unlink deletes a file
 func (fs *CloudUnifyFS) Unlink(path string) int {
+	// First check if it's a pending file (not yet uploaded)
+	fs.pendingFilesMu.Lock()
+	if _, isPending := fs.pendingFiles[path]; isPending {
+		delete(fs.pendingFiles, path)
+		fs.pendingFilesMu.Unlock()
+
+		// Delete staging file
+		stagingPath := fs.getStagingPath(path)
+		os.Remove(stagingPath)
+		return 0
+	}
+	fs.pendingFilesMu.Unlock()
+
+	// Check if file exists in database
 	file, err := fs.db.GetFileByPath(fs.ctx, path)
 	if err != nil {
+		log.Printf("Unlink error getting file: %v", err)
 		return -fuse.EIO
 	}
 
 	if file == nil {
+		// Maybe it's a staging file that was never tracked
+		stagingPath := fs.getStagingPath(path)
+		if _, err := os.Stat(stagingPath); err == nil {
+			os.Remove(stagingPath)
+			return 0
+		}
 		return -fuse.ENOENT
 	}
 
-	// Queue delete operation
-	fs.syncEngine.EnqueueDelete(fs.ctx, path, 0)
+	// Capture file info before deleting from database
+	cloudFileID := file.CloudFileID
+	providerID := file.ProviderID
+
+	// Delete from database immediately so it disappears from Finder
+	if err := fs.db.DeleteFile(fs.ctx, file.ID); err != nil {
+		log.Printf("Unlink error deleting from db: %v", err)
+		return -fuse.EIO
+	}
+
+	// Queue cloud delete operation (async) with file info
+	fs.syncEngine.EnqueueDelete(fs.ctx, path, cloudFileID, providerID, 0)
+
+	// Also clean up any local staging/cache
+	stagingPath := fs.getStagingPath(path)
+	os.Remove(stagingPath)
 
 	return 0
 }
@@ -575,7 +601,6 @@ func (fs *CloudUnifyFS) Rename(oldpath string, newpath string) int {
 
 // Truncate changes file size
 func (fs *CloudUnifyFS) Truncate(path string, size int64, fh uint64) int {
-	log.Printf("FUSE Truncate: %s, size=%d, fh=%d", path, size, fh)
 	if fh != 0 {
 		handle := fs.getHandle(fh)
 		if handle != nil && handle.File != nil {
@@ -603,7 +628,6 @@ func (fs *CloudUnifyFS) Truncate(path string, size int64, fh uint64) int {
 
 // Flush flushes cached data
 func (fs *CloudUnifyFS) Flush(path string, fh uint64) int {
-	log.Printf("FUSE Flush: %s, fh=%d", path, fh)
 	handle := fs.getHandle(fh)
 	if handle == nil {
 		return 0
@@ -727,7 +751,7 @@ func (fs *CloudUnifyFS) Mount() error {
 	}
 
 	host := fuse.NewFileSystemHost(fs)
-	
+
 	// Platform-specific mount options
 	options := []string{
 		"-o", "allow_other",

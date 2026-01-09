@@ -542,7 +542,32 @@ func (p *GoogleDriveProvider) Delete(ctx context.Context, fileID string) error {
 		return ErrNotAuthenticated
 	}
 
-	// TODO: Implement actual Google Drive delete
+	// Refresh token if needed
+	if err := p.ensureValidToken(ctx); err != nil {
+		return fmt.Errorf("failed to refresh token: %w", err)
+	}
+
+	// Create delete request
+	deleteURL := fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s", fileID)
+	req, err := http.NewRequestWithContext(ctx, "DELETE", deleteURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create delete request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+p.tokens.AccessToken)
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to delete file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 204 No Content is success, 404 means already deleted (also ok)
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("delete failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
 	return nil
 }
 

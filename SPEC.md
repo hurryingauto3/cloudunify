@@ -32,6 +32,250 @@ A cross-platform virtual filesystem that unifies multiple cloud storage provider
 
 ---
 
+## Product Vision
+
+CloudUnify is a cross-provider "virtual disk + policy engine":
+
+- **Namespace unification:** One tree, many providers
+- **Hydration:** Online-only placeholders → download on open/seek
+- **Write path:** Staging → policy decides placement → background upload
+- **Policy:** Allocation, redundancy, retention, cache, priorities
+- **OS integration:** Status badges, context menus, background daemon, notifications
+
+---
+
+## Feature Inventory
+
+### A) Unified Namespace & File Model
+
+| # | Feature | Description |
+|---|---------|-------------|
+| A1 | Unified root with provider folders + merged view | **Mode 1:** `/CloudUnify/{Google Drive, OneDrive, iCloud}/…` (transparent) <br> **Mode 2:** Merged `/CloudUnify/…` with a single virtual tree (long-term) |
+| A2 | Conflict model | Name collisions (same path exists on two providers) <br> Deterministic resolution: `prefer_local`, `prefer_provider`, `create_conflict_copy` |
+| A3 | Stable IDs | Maintain mapping `virtual_path ↔ provider_id + cloud_file_id` <br> Survive rename/move without losing identity |
+| A4 | Metadata normalization | modtime, size, mime, checksum, etag/revision, sharing bits (optional) |
+| A5 | Directory listing performance | Cached listings, incremental refresh, pagination, "partial tree hydration" |
+
+### B) Hydration, Placeholders & "Online-Only" Semantics (OneDrive-like behavior)
+
+| # | Feature | Description |
+|---|---------|-------------|
+| B1 | Placeholder files | File exists in Finder but content is cloud-only until opened |
+| B2 | Hydration on demand | Open/read triggers download; range reads for video seeking |
+| B3 | Dehydration / "Free up space" | Convert local to online-only while keeping placeholder |
+| B4 | Pin / "Always keep on this device" | "Pinned" files never evicted |
+| B5 | Finder indicators + context menu | **Badges:** online-only / downloading / local / syncing / error <br> **Right-click actions:** "Download now", "Free up space", "Pin", "View versions", "Retry" |
+| B6 | Platform-native implementation | **macOS:** Finder Sync Extension or File Provider extension <br> **Windows:** Cloud Files API for placeholders <br> **Linux:** Best-effort via FUSE + xattrs + tray UI (no first-class badges) |
+
+### C) Sync Engine & Queue Control
+
+| # | Feature | Description |
+|---|---------|-------------|
+| C1 | User-visible job queue | Upload/download/delete as jobs |
+| C2 | Priority + sequencing | "Do these next" (manual reordering) <br> Rules: foreground hydration jobs > uploads > background indexing |
+| C3 | Bandwidth and concurrency controls | Caps, schedules ("only overnight"), per-provider concurrency |
+| C4 | Retry policy & failure classification | Retriable (rate limit/network) vs permanent (auth/quota) |
+| C5 | Transactional correctness | DB-first state transitions; idempotent jobs; safe restarts |
+| C6 | Progress + resumability | Resumable upload (Drive), resumable download where possible, checkpointed ranges |
+
+### D) Multi-Cloud Allocation + Redundancy
+
+| # | Feature | Description |
+|---|---------|-------------|
+| D1 | Placement policies | Balanced usage (default), cheapest/most-free, provider affinity by folder (e.g., /Movies → Drive), file-type policy |
+| D2 | Redundancy modes | None (single provider), Mirror x2 (two providers), Mirror xN (all selected providers) |
+| D3 | Consistency model for redundancy | Write once → fan-out uploads; atomic virtual commit after quorum <br> Read preference: nearest cached / healthiest provider |
+| D4 | Repair tool | Detect missing replica and re-seed |
+| D5 | User controls | Per-folder redundancy settings (scalable UX) |
+
+### E) Caching for Large Video Workflows
+
+| # | Feature | Description |
+|---|---------|-------------|
+| E1 | Range cache | Cache chunks; optimize for sequential reads + random seeks |
+| E2 | Read-ahead / prefetch | Heuristics for players (VLC/QuickTime) seeking patterns |
+| E3 | Adaptive cache sizing | Global cap + per-folder caps; LRU + pinned exemption |
+| E4 | Integrity verification | Checksum on upload/download, background scrubber |
+| E5 | Local staging optimization | "Fast writes" by staging + later streaming upload |
+
+### F) Provider Integrations (Beyond Basic CRUD)
+
+#### Google Drive
+- Shared drives support
+- Resumable uploads
+- Delta-like changes (Drive "changes" API)
+
+#### OneDrive
+- Delta queries for listing
+- Large file upload sessions
+- Business vs personal accounts
+
+#### iCloud
+- Realistic plan: macOS-native integration first (local iCloud Drive folder mapping)
+- CloudKit/WebDAV only if accepting limitations
+
+### G) Background Daemon / "OS Native" Behavior
+
+| # | Feature | Description |
+|---|---------|-------------|
+| G1 | Runs at login | Auto-start on system boot |
+| G2 | Menu bar / system tray | Status: syncing, paused, errors, quotas, queue |
+| G3 | Notifications | Failures, quota warnings, completed large uploads, auth expired |
+| G4 | Auto-update | Self-updating mechanism |
+| G5 | Crash safety | Watchdog, safe shutdown, DB recovery |
+
+### H) Web Dashboard (and/or Local UI)
+
+| # | Feature | Description |
+|---|---------|-------------|
+| H1 | Storage overview | Total + breakdown by provider |
+| H2 | Queue management | Reorder, pause, retry operations |
+| H3 | File browser | Search, filter, pinned, online-only indicators |
+| H4 | Provider management | OAuth, quotas, disable provider |
+| H5 | Policies editor | Allocation + redundancy + cache settings |
+
+### I) Security & Privacy
+
+| # | Feature | Description |
+|---|---------|-------------|
+| I1 | Token storage | Keychain (macOS) / Credential Manager (Windows) / Secret Service (Linux) |
+| I2 | Per-file encryption | Optional v2 feature |
+| I3 | Sensitive logging rules | Redaction of tokens and personal data |
+| I4 | Least-privilege OAuth scopes | Minimal required permissions |
+| I5 | Secure config backup | Export/import with encryption |
+
+### J) Ops & Diagnostics
+
+| # | Feature | Description |
+|---|---------|-------------|
+| J1 | Structured logs + log viewer | Filterable, searchable logs |
+| J2 | "Collect diagnostics" bundle | One-click export for support |
+| J3 | Health endpoints | API status checks |
+| J4 | Self-test | Provider auth, upload/download, mount, placeholder behavior |
+| J5 | Performance profiling | pprof + benchmarks |
+
+---
+
+## Implementation Roadmap
+
+### Phase 0 — Hardening the Core *(Current Phase)*
+
+**Focus:** Reliability and foundation
+
+- [ ] Fix DB nullability issues
+- [ ] Deterministic job state machine
+- [ ] Reliable upload pipeline for Drive (resumable)
+- [ ] Solid file mapping (`virtual_path ↔ cloud_id`)
+- [ ] Basic UI queue visibility
+
+**Deliverable:** "Drop file → upload reliably; restart doesn't break; queue visible"
+
+---
+
+### Phase 1 — Usable as a Daily Driver
+
+**Focus:** Single provider + on-demand reads
+
+- [ ] Download-on-open + cache
+- [ ] Range reads for large video seeking
+- [ ] Pin/unpin + "free up space" (dehydrate)
+- [ ] Search (by path/name) from DB
+- [ ] Basic menubar/tray with pause/resume
+
+**Deliverable:** "It behaves like a cloud drive, not a sync toy"
+
+---
+
+### Phase 2 — Unified Browse Across Providers
+
+**Focus:** Multi-provider namespace
+
+- [ ] Provider folders + merged view option
+- [ ] OneDrive integration
+- [ ] Cross-provider move/copy semantics (defined rules)
+- [ ] Allocation policy (balanced usage)
+- [ ] Quota-aware placement
+
+**Deliverable:** "3TB pooled namespace, seamless browsing"
+
+---
+
+### Phase 3 — Native OS Indicators *(The "Feels Legit" Milestone)*
+
+**Focus:** OneDrive-like Finder status
+
+- [ ] macOS: Finder Sync extension badges + context menu
+- [ ] Windows: Cloud Files API (placeholders + badges)
+- [ ] Linux: Tray + extended attributes (best-effort)
+
+**Deliverable:** "Finder shows online-only/local/syncing/error"
+
+---
+
+### Phase 4 — Redundancy + Policy UI
+
+**Focus:** Replication feature
+
+- [ ] Per-folder redundancy rules
+- [ ] Mirror x2/xN + repair
+- [ ] Read preference + health monitoring
+- [ ] Policy editor in UI
+
+**Deliverable:** "Critical folders have replicas; user understands it"
+
+---
+
+### Phase 5 — Reliability + Packaging + Updates
+
+**Focus:** Ship-ready
+
+- [ ] Installers, auto-update, signed builds
+- [ ] Robust diagnostics bundle
+- [ ] Stress tests (10GB+ videos, power loss, token expiry)
+
+**Deliverable:** "Shippable product"
+
+---
+
+## Critical Success Features
+
+The 5 "must-have" features to match user expectations from OneDrive/Drive desktop:
+
+1. **Online-only placeholders + hydration**
+2. **Pin / Free up space**
+3. **Badges + context menu**
+4. **Delta sync** (fast listings, quick consistency)
+5. **Clear queue + retries** (user trust)
+
+---
+
+## Architecture Decision: FUSE vs Native
+
+### Option A: Keep FUSE as Core (Fastest to Ship Cross-Platform)
+
+| Pros | Cons |
+|------|------|
+| Cross-platform now | OS-native placeholders/badges are harder |
+| Single codebase | Feels less native |
+| Proven technology | Some performance overhead |
+
+### Option B: Go "File Provider / Cloud Files API" Per OS (Most Native)
+
+| Pros | Cons |
+|------|------|
+| Real placeholders + badges with OS semantics | More platform-specific engineering |
+| Best user experience | Longer development time |
+| Native performance | Three separate implementations |
+
+### Recommended: Hybrid Path
+
+- **Phase 0–2:** FUSE core for portability
+- **Phase 3+:** Add native layers where they matter (macOS/Windows)
+
+This allows rapid iteration on core functionality while building toward the native experience users expect.
+
+---
+
 ## Technical Stack
 
 ### Core Technology
@@ -874,6 +1118,6 @@ TBD (MIT recommended for open source)
 
 ---
 
-**Last Updated:** 2026-01-08
+**Last Updated:** 2026-01-09
 **Version:** 1.0-SPEC
-**Status:** Planning Phase
+**Status:** Phase 0 - Core Hardening
