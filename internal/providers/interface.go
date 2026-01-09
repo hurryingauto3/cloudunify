@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -204,4 +205,70 @@ func IsRetriableError(err error) bool {
 
 	// Unknown errors - be conservative and retry
 	return true
+}
+
+// ErrorCategory represents the type of error for retry policy
+type ErrorCategory string
+
+const (
+	ErrorCategoryNetwork   ErrorCategory = "network"
+	ErrorCategoryAuth      ErrorCategory = "auth"
+	ErrorCategoryQuota     ErrorCategory = "quota"
+	ErrorCategoryRateLimit ErrorCategory = "rate_limit"
+	ErrorCategoryNotFound  ErrorCategory = "not_found"
+	ErrorCategoryUnknown   ErrorCategory = "unknown"
+)
+
+// ClassifyError returns the category of an error for retry policy decisions
+func ClassifyError(err error) ErrorCategory {
+	if err == nil {
+		return ErrorCategoryUnknown
+	}
+
+	if errors.Is(err, ErrNetworkError) {
+		return ErrorCategoryNetwork
+	}
+	if errors.Is(err, ErrRateLimited) {
+		return ErrorCategoryRateLimit
+	}
+	if errors.Is(err, ErrTokenExpired) || errors.Is(err, ErrNotAuthenticated) {
+		return ErrorCategoryAuth
+	}
+	if errors.Is(err, ErrQuotaExceeded) {
+		return ErrorCategoryQuota
+	}
+	if errors.Is(err, ErrFileNotFound) {
+		return ErrorCategoryNotFound
+	}
+
+	// Check error message for hints
+	errMsg := err.Error()
+	if contains(errMsg, "timeout", "connection", "network", "dial", "EOF", "reset") {
+		return ErrorCategoryNetwork
+	}
+	if contains(errMsg, "401", "403", "unauthorized", "forbidden", "auth") {
+		return ErrorCategoryAuth
+	}
+	if contains(errMsg, "429", "rate", "too many", "throttle") {
+		return ErrorCategoryRateLimit
+	}
+	if contains(errMsg, "quota", "storage", "limit", "space") {
+		return ErrorCategoryQuota
+	}
+	if contains(errMsg, "404", "not found") {
+		return ErrorCategoryNotFound
+	}
+
+	return ErrorCategoryUnknown
+}
+
+// contains checks if s contains any of the substrings (case-insensitive)
+func contains(s string, substrs ...string) bool {
+	sl := strings.ToLower(s)
+	for _, sub := range substrs {
+		if strings.Contains(sl, strings.ToLower(sub)) {
+			return true
+		}
+	}
+	return false
 }

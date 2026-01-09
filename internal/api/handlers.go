@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"cloudunify/internal/config"
 	"cloudunify/internal/database"
 	"cloudunify/internal/providers"
 	"cloudunify/internal/storage"
@@ -22,6 +23,7 @@ type Handlers struct {
 	allocator       *storage.Allocator
 	syncEngine      *sync.Engine
 	providerManager *providers.Manager
+	configManager   *config.Manager
 }
 
 // NewHandlers creates a new handlers instance
@@ -32,6 +34,11 @@ func NewHandlers(db *database.DB, allocator *storage.Allocator, syncEngine *sync
 		syncEngine:      syncEngine,
 		providerManager: providerManager,
 	}
+}
+
+// SetConfigManager sets the configuration manager (called after handlers are created)
+func (h *Handlers) SetConfigManager(cm *config.Manager) {
+	h.configManager = cm
 }
 
 // ErrorResponse represents an API error response
@@ -780,4 +787,70 @@ func (h *Handlers) LoadProvidersFromDB() error {
 	}
 
 	return nil
+}
+
+// HandleGetConfig returns the current configuration
+func (h *Handlers) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
+	if h.configManager == nil {
+		respondError(w, http.StatusInternalServerError, "CONFIG_ERROR", "Configuration manager not initialized")
+		return
+	}
+
+	cfg := h.configManager.Get()
+
+	// Return a safe subset of config (no OAuth secrets)
+	response := struct {
+		MountPath          string            `json:"mount_path"`
+		Cache              config.CacheConfig `json:"cache"`
+		Sync               config.SyncConfig  `json:"sync"`
+		AllocationStrategy string            `json:"allocation_strategy"`
+	}{
+		MountPath:          cfg.MountPath,
+		Cache:              cfg.Cache,
+		Sync:               cfg.Sync,
+		AllocationStrategy: cfg.AllocationStrategy,
+	}
+
+	respondJSON(w, http.StatusOK, response)
+}
+
+// HandleUpdateConfig updates the configuration
+func (h *Handlers) HandleUpdateConfig(w http.ResponseWriter, r *http.Request) {
+	if h.configManager == nil {
+		respondError(w, http.StatusInternalServerError, "CONFIG_ERROR", "Configuration manager not initialized")
+		return
+	}
+
+	var req struct {
+		Sync *config.SyncConfig `json:"sync,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "INVALID_JSON", "Invalid request body")
+		return
+	}
+
+	var restartRequired bool
+
+	if req.Sync != nil {
+		restartRequired = h.configManager.UpdateSyncConfig(*req.Sync)
+		
+		// Update sync engine with new config (live reload)
+		if h.syncEngine != nil {
+			h.syncEngine.UpdateConfig(h.configManager.GetSyncConfig())
+		}
+	}
+
+	// Save config to disk
+	if err := h.configManager.Save(); err != nil {
+		log.Printf("Warning: Failed to save config: %v", err)
+	}
+
+	respondJSON(w, http.StatusOK, struct {
+		Success         bool `json:"success"`
+		RestartRequired bool `json:"restart_required"`
+	}{
+		Success:         true,
+		RestartRequired: restartRequired,
+	})
 }

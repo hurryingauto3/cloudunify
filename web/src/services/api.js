@@ -41,6 +41,10 @@ export const pauseSync = () => api.post('/sync/pause');
 export const resumeSync = () => api.post('/sync/resume');
 export const cancelSyncItem = (id) => api.delete(`/sync/queue/${id}`);
 
+// Config endpoints
+export const getConfig = () => api.get('/config');
+export const updateConfig = (config) => api.put('/config', config);
+
 // System endpoints
 export const getHealth = () => api.get('/health');
 export const getVersion = () => api.get('/version');

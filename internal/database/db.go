@@ -468,6 +468,37 @@ func (db *DB) ClearCompletedSync(ctx context.Context) error {
 	return nil
 }
 
+// DeleteCompletedJobsOlderThan removes completed jobs older than the specified duration
+func (db *DB) DeleteCompletedJobsOlderThan(ctx context.Context, age time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-age)
+	result, err := db.ExecContext(ctx, `
+		DELETE FROM sync_queue 
+		WHERE status = 'completed' 
+		AND updated_at < ?
+	`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete old completed jobs: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+// ResetStaleProcessingJobs resets jobs stuck in 'processing' state back to 'pending'
+func (db *DB) ResetStaleProcessingJobs(ctx context.Context, staleThreshold time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-staleThreshold)
+	result, err := db.ExecContext(ctx, `
+		UPDATE sync_queue 
+		SET status = 'pending', 
+		    error_message = 'Reset after stale processing timeout',
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE status = 'processing' 
+		AND updated_at < ?
+	`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("failed to reset stale processing jobs: %w", err)
+	}
+	return result.RowsAffected()
+}
+
 // Cache operations
 
 // CreateCacheEntry adds a cache entry

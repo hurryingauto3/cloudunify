@@ -48,11 +48,25 @@ type CacheConfig struct {
 	Path      string `json:"path"`
 }
 
+// RetryPolicy holds retry settings per error type
+type RetryPolicy struct {
+	NetworkRetries int `json:"network_retries"` // Retries for network errors (default: 5)
+	AuthRetries    int `json:"auth_retries"`    // Retries for auth errors (default: 1)
+	QuotaRetries   int `json:"quota_retries"`   // Retries for quota errors (default: 0)
+	RateLimitRetries int `json:"rate_limit_retries"` // Retries for rate limiting (default: 5)
+}
+
 // SyncConfig holds sync engine settings
 type SyncConfig struct {
 	UploadWorkers   int  `json:"upload_workers"`
 	DownloadWorkers int  `json:"download_workers"`
 	AutoSync        bool `json:"auto_sync"`
+	
+	// Advanced settings (live reload)
+	DownloadTimeoutSeconds    int         `json:"download_timeout_seconds"`     // Timeout for blocking downloads (default: 30, range: 5-300)
+	RetryPolicy               RetryPolicy `json:"retry_policy"`                 // Retry counts per error type
+	CompletedJobRetentionHours int        `json:"completed_job_retention_hours"` // Hours to keep completed jobs (default: 24, range: 1-168)
+	StaleJobTimeoutMinutes    int         `json:"stale_job_timeout_minutes"`    // Minutes before processing jobs are considered stale (default: 30, range: 5-120)
 }
 
 // APIConfig holds HTTP API server settings
@@ -80,6 +94,15 @@ func DefaultConfig(paths *Paths) *Config {
 			UploadWorkers:   3,
 			DownloadWorkers: 5,
 			AutoSync:        true,
+			DownloadTimeoutSeconds:    30,
+			RetryPolicy: RetryPolicy{
+				NetworkRetries:   5,
+				AuthRetries:      1,
+				QuotaRetries:     0,
+				RateLimitRetries: 5,
+			},
+			CompletedJobRetentionHours: 24,
+			StaleJobTimeoutMinutes:     30,
 		},
 		API: APIConfig{
 			Host: "localhost",
@@ -202,4 +225,90 @@ func (m *Manager) Paths() *Paths {
 // APIAddress returns the full API server address
 func (c *Config) APIAddress() string {
 	return fmt.Sprintf("%s:%d", c.API.Host, c.API.Port)
+}
+
+// ValidateSyncConfig validates sync configuration values and clamps them to valid ranges
+func ValidateSyncConfig(sync *SyncConfig) {
+	// Download timeout: 5-300 seconds
+	if sync.DownloadTimeoutSeconds < 5 {
+		sync.DownloadTimeoutSeconds = 5
+	} else if sync.DownloadTimeoutSeconds > 300 {
+		sync.DownloadTimeoutSeconds = 300
+	}
+
+	// Retry counts: 0-10
+	if sync.RetryPolicy.NetworkRetries < 0 {
+		sync.RetryPolicy.NetworkRetries = 0
+	} else if sync.RetryPolicy.NetworkRetries > 10 {
+		sync.RetryPolicy.NetworkRetries = 10
+	}
+
+	if sync.RetryPolicy.AuthRetries < 0 {
+		sync.RetryPolicy.AuthRetries = 0
+	} else if sync.RetryPolicy.AuthRetries > 10 {
+		sync.RetryPolicy.AuthRetries = 10
+	}
+
+	if sync.RetryPolicy.QuotaRetries < 0 {
+		sync.RetryPolicy.QuotaRetries = 0
+	} else if sync.RetryPolicy.QuotaRetries > 10 {
+		sync.RetryPolicy.QuotaRetries = 10
+	}
+
+	if sync.RetryPolicy.RateLimitRetries < 0 {
+		sync.RetryPolicy.RateLimitRetries = 0
+	} else if sync.RetryPolicy.RateLimitRetries > 10 {
+		sync.RetryPolicy.RateLimitRetries = 10
+	}
+
+	// Job retention: 1-168 hours (1 week)
+	if sync.CompletedJobRetentionHours < 1 {
+		sync.CompletedJobRetentionHours = 1
+	} else if sync.CompletedJobRetentionHours > 168 {
+		sync.CompletedJobRetentionHours = 168
+	}
+
+	// Stale job timeout: 5-120 minutes
+	if sync.StaleJobTimeoutMinutes < 5 {
+		sync.StaleJobTimeoutMinutes = 5
+	} else if sync.StaleJobTimeoutMinutes > 120 {
+		sync.StaleJobTimeoutMinutes = 120
+	}
+
+	// Worker counts: 1-10
+	if sync.UploadWorkers < 1 {
+		sync.UploadWorkers = 1
+	} else if sync.UploadWorkers > 10 {
+		sync.UploadWorkers = 10
+	}
+
+	if sync.DownloadWorkers < 1 {
+		sync.DownloadWorkers = 1
+	} else if sync.DownloadWorkers > 10 {
+		sync.DownloadWorkers = 10
+	}
+}
+
+// GetSyncConfig returns a copy of the sync configuration (thread-safe)
+func (m *Manager) GetSyncConfig() SyncConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config.Sync
+}
+
+// UpdateSyncConfig updates the sync configuration (live reload for most settings)
+// Returns true if a restart is required (worker count changed)
+func (m *Manager) UpdateSyncConfig(newSync SyncConfig) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if worker counts changed (requires restart)
+	restartRequired := m.config.Sync.UploadWorkers != newSync.UploadWorkers ||
+		m.config.Sync.DownloadWorkers != newSync.DownloadWorkers
+
+	// Validate and apply
+	ValidateSyncConfig(&newSync)
+	m.config.Sync = newSync
+
+	return restartRequired
 }

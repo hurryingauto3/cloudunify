@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"cloudunify/internal/config"
 	"cloudunify/internal/database"
 	"cloudunify/internal/providers"
 	"cloudunify/internal/storage"
@@ -25,6 +26,10 @@ type Engine struct {
 
 	uploadWorkers   int
 	downloadWorkers int
+
+	// Configurable settings (live reload)
+	syncConfig   config.SyncConfig
+	syncConfigMu sync.RWMutex
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -42,7 +47,34 @@ func NewEngine(db *database.DB, allocator *storage.Allocator, uploadWorkers, dow
 		providers:       make(map[int64]providers.CloudProvider),
 		uploadWorkers:   uploadWorkers,
 		downloadWorkers: downloadWorkers,
+		syncConfig: config.SyncConfig{
+			DownloadTimeoutSeconds:     30,
+			CompletedJobRetentionHours: 24,
+			StaleJobTimeoutMinutes:     30,
+			RetryPolicy: config.RetryPolicy{
+				NetworkRetries:   5,
+				AuthRetries:      1,
+				QuotaRetries:     0,
+				RateLimitRetries: 5,
+			},
+		},
 	}
+}
+
+// UpdateConfig updates the sync configuration (live reload)
+func (e *Engine) UpdateConfig(cfg config.SyncConfig) {
+	e.syncConfigMu.Lock()
+	defer e.syncConfigMu.Unlock()
+	e.syncConfig = cfg
+	log.Printf("Sync engine config updated: timeout=%ds, retention=%dh",
+		cfg.DownloadTimeoutSeconds, cfg.CompletedJobRetentionHours)
+}
+
+// GetConfig returns the current sync configuration
+func (e *Engine) GetConfig() config.SyncConfig {
+	e.syncConfigMu.RLock()
+	defer e.syncConfigMu.RUnlock()
+	return e.syncConfig
 }
 
 // Queue returns the sync queue
@@ -84,6 +116,11 @@ func (e *Engine) Start(ctx context.Context) error {
 
 	e.ctx, e.cancel = context.WithCancel(ctx)
 
+	// Reset stale processing jobs on startup
+	if err := e.recoverStaleJobs(); err != nil {
+		log.Printf("Warning: failed to recover stale jobs: %v", err)
+	}
+
 	// Start upload workers
 	for i := 0; i < e.uploadWorkers; i++ {
 		e.wg.Add(1)
@@ -95,6 +132,10 @@ func (e *Engine) Start(ctx context.Context) error {
 		e.wg.Add(1)
 		go e.downloadWorker(i)
 	}
+
+	// Start cleanup worker
+	e.wg.Add(1)
+	go e.cleanupWorker()
 
 	log.Printf("Sync engine started with %d upload workers and %d download workers",
 		e.uploadWorkers, e.downloadWorkers)
@@ -235,8 +276,9 @@ func (e *Engine) processUpload(item *database.SyncQueueItem) {
 	// Upload to cloud
 	metadata, err := provider.UploadStream(e.ctx, progressReader, item.VirtualPath, fileInfo.Size())
 	if err != nil {
-		if providers.IsRetriableError(err) && item.RetryCount < 3 {
-			e.queue.Fail(e.ctx, item.ID, fmt.Sprintf("upload failed (will retry): %v", err))
+		if e.shouldRetry(err, item.RetryCount) {
+			category := providers.ClassifyError(err)
+			e.queue.Fail(e.ctx, item.ID, fmt.Sprintf("upload failed (%s, will retry): %v", category, err))
 			e.queue.Retry(e.ctx, item.ID)
 		} else {
 			e.queue.Fail(e.ctx, item.ID, fmt.Sprintf("upload failed: %v", err))
@@ -365,8 +407,9 @@ func (e *Engine) processDelete(item *database.SyncQueueItem) {
 
 	// Delete from cloud
 	if err := provider.Delete(e.ctx, cloudFileID); err != nil {
-		if providers.IsRetriableError(err) && item.RetryCount < 3 {
-			e.queue.Fail(e.ctx, item.ID, fmt.Sprintf("delete failed (will retry): %v", err))
+		if e.shouldRetry(err, item.RetryCount) {
+			category := providers.ClassifyError(err)
+			e.queue.Fail(e.ctx, item.ID, fmt.Sprintf("delete failed (%s, will retry): %v", category, err))
 			e.queue.Retry(e.ctx, item.ID)
 		} else {
 			e.queue.Fail(e.ctx, item.ID, fmt.Sprintf("delete failed: %v", err))
@@ -401,4 +444,80 @@ func (e *Engine) IsRunning() bool {
 	e.runningMu.Lock()
 	defer e.runningMu.Unlock()
 	return e.running
+}
+
+// getMaxRetries returns the max retry count for an error category based on config
+func (e *Engine) getMaxRetries(category providers.ErrorCategory) int {
+	cfg := e.GetConfig()
+	switch category {
+	case providers.ErrorCategoryNetwork:
+		return cfg.RetryPolicy.NetworkRetries
+	case providers.ErrorCategoryAuth:
+		return cfg.RetryPolicy.AuthRetries
+	case providers.ErrorCategoryQuota:
+		return cfg.RetryPolicy.QuotaRetries
+	case providers.ErrorCategoryRateLimit:
+		return cfg.RetryPolicy.RateLimitRetries
+	default:
+		// Unknown errors get network retry count
+		return cfg.RetryPolicy.NetworkRetries
+	}
+}
+
+// shouldRetry determines if an error should be retried based on category and retry count
+func (e *Engine) shouldRetry(err error, retryCount int) bool {
+	category := providers.ClassifyError(err)
+	maxRetries := e.getMaxRetries(category)
+	return retryCount < maxRetries
+}
+
+// recoverStaleJobs resets jobs that were processing when the engine stopped
+func (e *Engine) recoverStaleJobs() error {
+	cfg := e.GetConfig()
+	staleThreshold := time.Duration(cfg.StaleJobTimeoutMinutes) * time.Minute
+	
+	count, err := e.db.ResetStaleProcessingJobs(e.ctx, staleThreshold)
+	if err != nil {
+		return err
+	}
+	
+	if count > 0 {
+		log.Printf("Recovered %d stale processing jobs", count)
+	}
+	return nil
+}
+
+// cleanupWorker periodically cleans up completed jobs
+func (e *Engine) cleanupWorker() {
+	defer e.wg.Done()
+	log.Println("Cleanup worker started")
+
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-e.ctx.Done():
+			log.Println("Cleanup worker stopping")
+			return
+		case <-ticker.C:
+			e.cleanupCompletedJobs()
+		}
+	}
+}
+
+// cleanupCompletedJobs removes old completed jobs based on retention config
+func (e *Engine) cleanupCompletedJobs() {
+	cfg := e.GetConfig()
+	retentionDuration := time.Duration(cfg.CompletedJobRetentionHours) * time.Hour
+
+	count, err := e.db.DeleteCompletedJobsOlderThan(e.ctx, retentionDuration)
+	if err != nil {
+		log.Printf("Warning: failed to cleanup completed jobs: %v", err)
+		return
+	}
+
+	if count > 0 {
+		log.Printf("Cleaned up %d completed jobs older than %v", count, retentionDuration)
+	}
 }

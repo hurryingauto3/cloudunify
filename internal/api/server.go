@@ -88,6 +88,10 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/sync/resume", s.handlers.HandleResumeSync).Methods("POST")
 	api.HandleFunc("/sync/queue/{id}", s.handlers.HandleCancelSyncItem).Methods("DELETE")
 
+	// Configuration
+	api.HandleFunc("/config", s.handlers.HandleGetConfig).Methods("GET")
+	api.HandleFunc("/config", s.handlers.HandleUpdateConfig).Methods("PUT")
+
 	// System
 	api.HandleFunc("/shutdown", s.handlers.HandleShutdown).Methods("POST")
 
@@ -156,6 +160,11 @@ func (s *Server) Router() *mux.Router {
 // ProviderManager returns the provider manager
 func (s *Server) ProviderManager() *providers.Manager {
 	return s.providerManager
+}
+
+// Handlers returns the handlers instance for configuration
+func (s *Server) Handlers() *Handlers {
+	return s.handlers
 }
 
 // BroadcastEvent sends an event to all WebSocket clients

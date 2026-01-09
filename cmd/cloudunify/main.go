@@ -87,6 +87,8 @@ func main() {
 
 	// Initialize sync engine
 	syncEngine := sync.NewEngine(db, allocator, cfg.Sync.UploadWorkers, cfg.Sync.DownloadWorkers)
+	// Apply sync config from configuration
+	syncEngine.UpdateConfig(cfg.Sync)
 	log.Println("Sync engine initialized")
 
 	// Start sync engine if enabled
@@ -112,6 +114,9 @@ func main() {
 	// Initialize API server with provider manager
 	apiAddress := cfg.APIAddress()
 	apiServer := api.NewServer(apiAddress, db, allocator, syncEngine, providerManager)
+	
+	// Inject config manager into handlers for config API
+	apiServer.Handlers().SetConfigManager(configManager)
 
 	// Start API server in background
 	go func() {
