@@ -1,9 +1,24 @@
 import { useState } from 'react';
+import {
+    Card,
+    CardContent,
+    Box,
+    Typography,
+    LinearProgress,
+    Button,
+    Chip,
+    Stack,
+} from '@mui/material';
+import GoogleIcon from '@mui/icons-material/Google';
+import CloudIcon from '@mui/icons-material/Cloud';
+import AppleIcon from '@mui/icons-material/Apple';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 
 const providerIcons = {
-    google_drive: '📁',
-    onedrive: '☁️',
-    icloud: '🍎',
+    google_drive: <GoogleIcon />,
+    onedrive: <CloudIcon />,
+    icloud: <AppleIcon />,
 };
 
 const providerNames = {
@@ -39,43 +54,77 @@ function ProviderCard({ provider, onRemove, onRefresh }) {
     };
 
     return (
-        <div className="provider-card">
-            <div className="provider-header">
-                <span className="provider-icon">{providerIcons[provider.type] || '📦'}</span>
-                <div className="provider-info">
-                    <h3>{provider.name}</h3>
-                    <span className="provider-type">{providerNames[provider.type] || provider.type}</span>
-                </div>
-                <span className={`status-badge ${provider.enabled ? 'connected' : 'disconnected'}`}>
-                    {provider.enabled ? 'Connected' : 'Disconnected'}
-                </span>
-            </div>
+        <Card>
+            <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, mb: 2 }}>
+                    <Box
+                        sx={{
+                            width: 40,
+                            height: 40,
+                            borderRadius: 1,
+                            bgcolor: 'primary.50',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: 'primary.main',
+                        }}
+                    >
+                        {providerIcons[provider.type] || <CloudIcon />}
+                    </Box>
+                    <Box sx={{ flex: 1 }}>
+                        <Typography variant="subtitle1" fontWeight={600}>
+                            {provider.name}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                            {providerNames[provider.type] || provider.type}
+                        </Typography>
+                    </Box>
+                    <Chip
+                        label={provider.enabled ? 'Connected' : 'Disconnected'}
+                        size="small"
+                        color={provider.enabled ? 'success' : 'error'}
+                        variant="outlined"
+                    />
+                </Box>
 
-            <div className="storage-bar">
-                <div
-                    className="storage-used"
-                    style={{ width: `${Math.min(usagePercent, 100)}%` }}
-                />
-            </div>
+                <Box sx={{ mb: 2 }}>
+                    <LinearProgress
+                        variant="determinate"
+                        value={Math.min(usagePercent, 100)}
+                        sx={{ height: 8, borderRadius: 1, mb: 1 }}
+                    />
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <Typography variant="caption" color="text.secondary">
+                            {formatBytes(provider.used_bytes)} used
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                            {formatBytes(provider.quota_bytes - provider.used_bytes)} free
+                        </Typography>
+                    </Box>
+                </Box>
 
-            <div className="storage-info">
-                <span>{formatBytes(provider.used_bytes)} used</span>
-                <span>{formatBytes(provider.quota_bytes - provider.used_bytes)} free</span>
-            </div>
-
-            <div className="provider-actions">
-                <button onClick={() => onRefresh(provider.id)} className="btn btn-secondary">
-                    Refresh
-                </button>
-                <button
-                    onClick={handleRemove}
-                    className="btn btn-danger"
-                    disabled={isRemoving}
-                >
-                    {isRemoving ? 'Removing...' : 'Remove'}
-                </button>
-            </div>
-        </div>
+                <Stack direction="row" spacing={1}>
+                    <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<RefreshIcon />}
+                        onClick={() => onRefresh(provider.id)}
+                    >
+                        Refresh
+                    </Button>
+                    <Button
+                        size="small"
+                        variant="outlined"
+                        color="error"
+                        startIcon={<DeleteOutlineIcon />}
+                        onClick={handleRemove}
+                        disabled={isRemoving}
+                    >
+                        {isRemoving ? 'Removing...' : 'Remove'}
+                    </Button>
+                </Stack>
+            </CardContent>
+        </Card>
     );
 }
 

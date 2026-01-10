@@ -1,11 +1,14 @@
+import { Box, Typography } from '@mui/material';
 import FileBrowser from '../components/FileBrowser';
 
 function Files() {
   return (
-    <div className="files-page">
-      <h1>Files</h1>
+    <Box>
+      <Typography variant="h1" sx={{ mb: 3 }}>
+        Files
+      </Typography>
       <FileBrowser />
-    </div>
+    </Box>
   );
 }
 

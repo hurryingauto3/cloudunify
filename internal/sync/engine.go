@@ -475,12 +475,12 @@ func (e *Engine) shouldRetry(err error, retryCount int) bool {
 func (e *Engine) recoverStaleJobs() error {
 	cfg := e.GetConfig()
 	staleThreshold := time.Duration(cfg.StaleJobTimeoutMinutes) * time.Minute
-	
+
 	count, err := e.db.ResetStaleProcessingJobs(e.ctx, staleThreshold)
 	if err != nil {
 		return err
 	}
-	
+
 	if count > 0 {
 		log.Printf("Recovered %d stale processing jobs", count)
 	}

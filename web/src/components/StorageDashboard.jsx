@@ -1,4 +1,12 @@
 import { useState, useEffect } from 'react';
+import {
+    Box,
+    Card,
+    CardContent,
+    Typography,
+    LinearProgress,
+    Grid,
+} from '@mui/material';
 import { getStorageStats } from '../services/api';
 import ProviderCard from './ProviderCard';
 
@@ -34,55 +42,82 @@ function StorageDashboard({ providers, onRemoveProvider, onRefreshProvider }) {
     };
 
     if (loading && !stats) {
-        return <div className="loading">Loading storage statistics...</div>;
+        return (
+            <Card>
+                <CardContent>
+                    <Typography color="text.secondary">Loading storage statistics...</Typography>
+                </CardContent>
+            </Card>
+        );
     }
 
     if (error) {
-        return <div className="error">{error}</div>;
+        return (
+            <Card>
+                <CardContent>
+                    <Typography color="error">{error}</Typography>
+                </CardContent>
+            </Card>
+        );
     }
 
     const usagePercent = stats ? (stats.used_bytes / stats.total_bytes) * 100 : 0;
 
     return (
-        <div className="storage-dashboard">
-            <div className="total-storage">
-                <h2>Total Storage</h2>
-                <div className="storage-overview">
-                    <div className="storage-bar large">
-                        <div
-                            className="storage-used"
-                            style={{ width: `${Math.min(usagePercent, 100)}%` }}
-                        />
-                    </div>
-                    <div className="storage-numbers">
-                        <span className="used">{formatBytes(stats?.used_bytes || 0)} used</span>
-                        <span className="total">of {formatBytes(stats?.total_bytes || 0)}</span>
-                        <span className="free">{formatBytes(stats?.free_bytes || 0)} available</span>
-                    </div>
-                </div>
-            </div>
+        <Box>
+            <Card sx={{ mb: 3 }}>
+                <CardContent>
+                    <Typography variant="h2" gutterBottom>
+                        Total Storage
+                    </Typography>
+                    <LinearProgress
+                        variant="determinate"
+                        value={Math.min(usagePercent, 100)}
+                        sx={{ height: 12, borderRadius: 1, mb: 2 }}
+                    />
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
+                        <Typography variant="body2" color="text.secondary">
+                            <strong>{formatBytes(stats?.used_bytes || 0)}</strong> used
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            of <strong>{formatBytes(stats?.total_bytes || 0)}</strong>
+                        </Typography>
+                        <Typography variant="body2" color="success.main">
+                            <strong>{formatBytes(stats?.free_bytes || 0)}</strong> available
+                        </Typography>
+                    </Box>
+                </CardContent>
+            </Card>
 
-            <div className="providers-section">
-                <h2>Connected Providers</h2>
-                {providers.length === 0 ? (
-                    <div className="empty-state">
-                        <p>No storage providers connected.</p>
-                        <p>Add a provider to get started!</p>
-                    </div>
-                ) : (
-                    <div className="providers-grid">
-                        {providers.map((provider) => (
+            <Typography variant="h2" gutterBottom>
+                Connected Providers
+            </Typography>
+
+            {providers.length === 0 ? (
+                <Card>
+                    <CardContent sx={{ textAlign: 'center', py: 4 }}>
+                        <Typography color="text.secondary">
+                            No storage providers connected.
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            Add a provider to get started!
+                        </Typography>
+                    </CardContent>
+                </Card>
+            ) : (
+                <Grid container spacing={2}>
+                    {providers.map((provider) => (
+                        <Grid item xs={12} md={6} lg={4} key={provider.id}>
                             <ProviderCard
-                                key={provider.id}
                                 provider={provider}
                                 onRemove={onRemoveProvider}
                                 onRefresh={onRefreshProvider}
                             />
-                        ))}
-                    </div>
-                )}
-            </div>
-        </div>
+                        </Grid>
+                    ))}
+                </Grid>
+            )}
+        </Box>
     );
 }
 

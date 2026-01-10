@@ -800,10 +800,10 @@ func (h *Handlers) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Return a safe subset of config (no OAuth secrets)
 	response := struct {
-		MountPath          string            `json:"mount_path"`
+		MountPath          string             `json:"mount_path"`
 		Cache              config.CacheConfig `json:"cache"`
 		Sync               config.SyncConfig  `json:"sync"`
-		AllocationStrategy string            `json:"allocation_strategy"`
+		AllocationStrategy string             `json:"allocation_strategy"`
 	}{
 		MountPath:          cfg.MountPath,
 		Cache:              cfg.Cache,
@@ -834,7 +834,7 @@ func (h *Handlers) HandleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 	if req.Sync != nil {
 		restartRequired = h.configManager.UpdateSyncConfig(*req.Sync)
-		
+
 		// Update sync engine with new config (live reload)
 		if h.syncEngine != nil {
 			h.syncEngine.UpdateConfig(h.configManager.GetSyncConfig())

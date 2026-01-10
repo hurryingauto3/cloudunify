@@ -1,4 +1,34 @@
 import { useState, useEffect } from 'react';
+import {
+  Box,
+  Card,
+  CardContent,
+  Typography,
+  Breadcrumbs,
+  Link,
+  Button,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  IconButton,
+  Tooltip,
+  Stack,
+} from '@mui/material';
+import HomeIcon from '@mui/icons-material/Home';
+import FolderIcon from '@mui/icons-material/Folder';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import ImageIcon from '@mui/icons-material/Image';
+import VideoFileIcon from '@mui/icons-material/VideoFile';
+import AudioFileIcon from '@mui/icons-material/AudioFile';
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
+import DescriptionIcon from '@mui/icons-material/Description';
+import FolderZipIcon from '@mui/icons-material/FolderZip';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { getFiles, deleteFile } from '../services/api';
 
 function formatBytes(bytes) {
@@ -57,8 +87,6 @@ function FileBrowser() {
   const handleFileClick = (file) => {
     if (file.is_dir) {
       navigateTo(file.virtual_path);
-    } else {
-      // TODO: Open file preview or download
     }
   };
 
@@ -75,92 +103,143 @@ function FileBrowser() {
   };
 
   const getFileIcon = (file) => {
-    if (file.is_dir) return '📁';
+    if (file.is_dir) return <FolderIcon color="primary" />;
 
     const ext = file.virtual_path.split('.').pop()?.toLowerCase();
-    const icons = {
-      mp4: '🎬', mov: '🎬', avi: '🎬', mkv: '🎬',
-      mp3: '🎵', wav: '🎵', flac: '🎵',
-      jpg: '🖼️', jpeg: '🖼️', png: '🖼️', gif: '🖼️',
-      pdf: '📄', doc: '📝', docx: '📝', txt: '📝',
-      zip: '📦', rar: '📦', '7z': '📦',
+    const iconMap = {
+      mp4: <VideoFileIcon color="secondary" />,
+      mov: <VideoFileIcon color="secondary" />,
+      avi: <VideoFileIcon color="secondary" />,
+      mkv: <VideoFileIcon color="secondary" />,
+      mp3: <AudioFileIcon color="info" />,
+      wav: <AudioFileIcon color="info" />,
+      flac: <AudioFileIcon color="info" />,
+      jpg: <ImageIcon color="success" />,
+      jpeg: <ImageIcon color="success" />,
+      png: <ImageIcon color="success" />,
+      gif: <ImageIcon color="success" />,
+      pdf: <PictureAsPdfIcon color="error" />,
+      doc: <DescriptionIcon />,
+      docx: <DescriptionIcon />,
+      txt: <DescriptionIcon />,
+      zip: <FolderZipIcon />,
+      rar: <FolderZipIcon />,
+      '7z': <FolderZipIcon />,
     };
-    return icons[ext] || '📄';
+    return iconMap[ext] || <InsertDriveFileIcon />;
   };
 
   const breadcrumbs = currentPath.split('/').filter(Boolean);
 
   return (
-    <div className="file-browser">
-      <div className="breadcrumbs">
-        <button onClick={() => navigateTo('/')} className="breadcrumb">
-          🏠 Home
-        </button>
-        {breadcrumbs.map((part, index) => (
-          <span key={index}>
-            <span className="separator">/</span>
-            <button
-              onClick={() => navigateTo('/' + breadcrumbs.slice(0, index + 1).join('/'))}
-              className="breadcrumb"
+    <Card>
+      <CardContent>
+        <Box sx={{ mb: 2 }}>
+          <Breadcrumbs>
+            <Link
+              component="button"
+              variant="body2"
+              underline="hover"
+              onClick={() => navigateTo('/')}
+              sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}
             >
-              {part}
-            </button>
-          </span>
-        ))}
-      </div>
+              <HomeIcon fontSize="small" />
+              Home
+            </Link>
+            {breadcrumbs.map((part, index) => (
+              <Link
+                key={index}
+                component="button"
+                variant="body2"
+                underline="hover"
+                onClick={() => navigateTo('/' + breadcrumbs.slice(0, index + 1).join('/'))}
+              >
+                {part}
+              </Link>
+            ))}
+          </Breadcrumbs>
+        </Box>
 
-      <div className="file-actions">
-        <button onClick={navigateUp} disabled={currentPath === '/'} className="btn">
-          ⬆️ Up
-        </button>
-        <button onClick={() => fetchFiles(currentPath)} className="btn">
-          🔄 Refresh
-        </button>
-      </div>
+        <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<ArrowUpwardIcon />}
+            onClick={navigateUp}
+            disabled={currentPath === '/'}
+          >
+            Up
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<RefreshIcon />}
+            onClick={() => fetchFiles(currentPath)}
+          >
+            Refresh
+          </Button>
+        </Stack>
 
-      {loading ? (
-        <div className="loading">Loading files...</div>
-      ) : error ? (
-        <div className="error">{error}</div>
-      ) : files.length === 0 ? (
-        <div className="empty-state">
-          <p>This folder is empty</p>
-        </div>
-      ) : (
-        <div className="file-list">
-          <div className="file-header">
-            <span className="col-name">Name</span>
-            <span className="col-size">Size</span>
-            <span className="col-modified">Modified</span>
-            <span className="col-actions">Actions</span>
-          </div>
-          {files.map((file) => (
-            <div
-              key={file.id}
-              className={`file-row ${file.is_dir ? 'folder' : 'file'}`}
-              onClick={() => handleFileClick(file)}
-            >
-              <span className="col-name">
-                <span className="file-icon">{getFileIcon(file)}</span>
-                {file.virtual_path.split('/').pop()}
-              </span>
-              <span className="col-size">
-                {file.is_dir ? '—' : formatBytes(file.size_bytes)}
-              </span>
-              <span className="col-modified">{formatDate(file.updated_at)}</span>
-              <span className="col-actions">
-                <button
-                  className="btn btn-small btn-danger"
-                  onClick={(e) => handleDelete(file, e)}
-                >
-                  🗑️
-                </button>
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+        {loading ? (
+          <Typography color="text.secondary">Loading files...</Typography>
+        ) : error ? (
+          <Typography color="error">{error}</Typography>
+        ) : files.length === 0 ? (
+          <Box sx={{ textAlign: 'center', py: 4 }}>
+            <Typography color="text.secondary">This folder is empty</Typography>
+          </Box>
+        ) : (
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Name</TableCell>
+                  <TableCell>Size</TableCell>
+                  <TableCell>Modified</TableCell>
+                  <TableCell align="right">Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {files.map((file) => (
+                  <TableRow
+                    key={file.id}
+                    hover
+                    sx={{ cursor: file.is_dir ? 'pointer' : 'default' }}
+                    onClick={() => handleFileClick(file)}
+                  >
+                    <TableCell>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        {getFileIcon(file)}
+                        <Typography variant="body2">
+                          {file.virtual_path.split('/').pop()}
+                        </Typography>
+                      </Box>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color="text.secondary">
+                        {file.is_dir ? '-' : formatBytes(file.size_bytes)}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color="text.secondary">
+                        {formatDate(file.updated_at)}
+                      </Typography>
+                    </TableCell>
+                    <TableCell align="right">
+                      <Tooltip title="Delete">
+                        <IconButton size="small" onClick={(e) => handleDelete(file, e)}>
+                          <DeleteOutlineIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

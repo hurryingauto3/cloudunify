@@ -1,5 +1,39 @@
 import { useState, useEffect, useCallback } from 'react';
+import {
+  Box,
+  Typography,
+  Card,
+  CardContent,
+  Grid,
+  TextField,
+  FormControlLabel,
+  Checkbox,
+  Button,
+  Alert,
+  Chip,
+  Divider,
+  Stack,
+} from '@mui/material';
+import StorageIcon from '@mui/icons-material/Storage';
+import SyncIcon from '@mui/icons-material/Sync';
+import TimerIcon from '@mui/icons-material/Timer';
+import ReplayIcon from '@mui/icons-material/Replay';
+import InfoIcon from '@mui/icons-material/Info';
 import { getHealth, getVersion, getConfig, updateConfig } from '../services/api';
+
+function SettingsSection({ icon, title, children }) {
+  return (
+    <Card sx={{ height: '100%' }}>
+      <CardContent>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+          <Box sx={{ color: 'primary.main' }}>{icon}</Box>
+          <Typography variant="h3">{title}</Typography>
+        </Box>
+        {children}
+      </CardContent>
+    </Card>
+  );
+}
 
 function Settings() {
   const [health, setHealth] = useState(null);
@@ -14,7 +48,6 @@ function Settings() {
     uploadWorkers: 3,
     downloadWorkers: 5,
     autoSync: true,
-    // Advanced sync settings
     downloadTimeoutSeconds: 30,
     completedJobRetentionHours: 24,
     staleJobTimeoutMinutes: 30,
@@ -28,10 +61,7 @@ function Settings() {
 
   const fetchSystemInfo = useCallback(async () => {
     try {
-      const [healthRes, versionRes] = await Promise.all([
-        getHealth(),
-        getVersion(),
-      ]);
+      const [healthRes, versionRes] = await Promise.all([getHealth(), getVersion()]);
       setHealth(healthRes.data);
       setVersion(versionRes.data);
     } catch (err) {
@@ -78,7 +108,6 @@ function Settings() {
   };
 
   const handleRetryPolicyChange = (key, value) => {
-    // Clamp value to 0-10
     const clampedValue = Math.max(0, Math.min(10, parseInt(value) || 0));
     setSettings((prev) => ({
       ...prev,
@@ -116,192 +145,242 @@ function Settings() {
   };
 
   return (
-    <div className="settings-page">
-      <h1>Settings</h1>
-
-      <section className="settings-section">
-        <h2>Mount Point</h2>
-        <div className="setting-item">
-          <label>Virtual Drive Location</label>
-          <input
-            type="text"
-            value={settings.mountPath}
-            onChange={(e) => handleChange('mountPath', e.target.value)}
-          />
-          <p className="hint">The location where CloudUnify will mount the virtual drive</p>
-        </div>
-      </section>
-
-      <section className="settings-section">
-        <h2>Cache Settings</h2>
-        <div className="setting-item">
-          <label>
-            <input
-              type="checkbox"
-              checked={settings.cacheEnabled}
-              onChange={(e) => handleChange('cacheEnabled', e.target.checked)}
-            />
-            Enable local cache
-          </label>
-          <p className="hint">Cache frequently accessed files for faster access</p>
-        </div>
-        <div className="setting-item">
-          <label>Cache Size (GB)</label>
-          <input
-            type="number"
-            min="1"
-            max="100"
-            value={settings.cacheSizeGB}
-            onChange={(e) => handleChange('cacheSizeGB', parseInt(e.target.value))}
-            disabled={!settings.cacheEnabled}
-          />
-        </div>
-      </section>
-
-      <section className="settings-section">
-        <h2>Sync Settings</h2>
-        <div className="setting-item">
-          <label>
-            <input
-              type="checkbox"
-              checked={settings.autoSync}
-              onChange={(e) => handleChange('autoSync', e.target.checked)}
-            />
-            Auto-sync files
-          </label>
-          <p className="hint">Automatically sync changes in the background</p>
-        </div>
-        <div className="setting-item">
-          <label>Upload Workers</label>
-          <input
-            type="number"
-            min="1"
-            max="10"
-            value={settings.uploadWorkers}
-            onChange={(e) => handleChange('uploadWorkers', parseInt(e.target.value))}
-          />
-          <p className="hint">Requires restart to take effect</p>
-        </div>
-        <div className="setting-item">
-          <label>Download Workers</label>
-          <input
-            type="number"
-            min="1"
-            max="10"
-            value={settings.downloadWorkers}
-            onChange={(e) => handleChange('downloadWorkers', parseInt(e.target.value))}
-          />
-          <p className="hint">Requires restart to take effect</p>
-        </div>
-      </section>
-
-      <section className="settings-section">
-        <h2>Advanced Sync Settings</h2>
-        <div className="setting-item">
-          <label>Download Timeout (seconds)</label>
-          <input
-            type="number"
-            min="5"
-            max="300"
-            value={settings.downloadTimeoutSeconds}
-            onChange={(e) => handleChange('downloadTimeoutSeconds', Math.max(5, Math.min(300, parseInt(e.target.value) || 30)))}
-          />
-          <p className="hint">Maximum time to wait for file downloads (5-300 seconds)</p>
-        </div>
-        <div className="setting-item">
-          <label>Job Retention (hours)</label>
-          <input
-            type="number"
-            min="1"
-            max="168"
-            value={settings.completedJobRetentionHours}
-            onChange={(e) => handleChange('completedJobRetentionHours', Math.max(1, Math.min(168, parseInt(e.target.value) || 24)))}
-          />
-          <p className="hint">How long to keep completed jobs in the queue (1-168 hours)</p>
-        </div>
-        <div className="setting-item">
-          <label>Stale Job Timeout (minutes)</label>
-          <input
-            type="number"
-            min="5"
-            max="120"
-            value={settings.staleJobTimeoutMinutes}
-            onChange={(e) => handleChange('staleJobTimeoutMinutes', Math.max(5, Math.min(120, parseInt(e.target.value) || 30)))}
-          />
-          <p className="hint">Jobs stuck processing longer than this are reset (5-120 minutes)</p>
-        </div>
-      </section>
-
-      <section className="settings-section">
-        <h2>Retry Policy</h2>
-        <p className="section-hint">Configure how many times to retry failed operations (0-10)</p>
-        <div className="setting-item">
-          <label>Network Errors</label>
-          <input
-            type="number"
-            min="0"
-            max="10"
-            value={settings.retryPolicy.networkRetries}
-            onChange={(e) => handleRetryPolicyChange('networkRetries', e.target.value)}
-          />
-          <p className="hint">Connection timeouts, DNS failures, etc.</p>
-        </div>
-        <div className="setting-item">
-          <label>Rate Limit Errors</label>
-          <input
-            type="number"
-            min="0"
-            max="10"
-            value={settings.retryPolicy.rateLimitRetries}
-            onChange={(e) => handleRetryPolicyChange('rateLimitRetries', e.target.value)}
-          />
-          <p className="hint">API throttling from cloud providers</p>
-        </div>
-        <div className="setting-item">
-          <label>Auth Errors</label>
-          <input
-            type="number"
-            min="0"
-            max="10"
-            value={settings.retryPolicy.authRetries}
-            onChange={(e) => handleRetryPolicyChange('authRetries', e.target.value)}
-          />
-          <p className="hint">Token expiry, authorization failures</p>
-        </div>
-        <div className="setting-item">
-          <label>Quota Errors</label>
-          <input
-            type="number"
-            min="0"
-            max="10"
-            value={settings.retryPolicy.quotaRetries}
-            onChange={(e) => handleRetryPolicyChange('quotaRetries', e.target.value)}
-          />
-          <p className="hint">Storage quota exceeded (usually not retriable)</p>
-        </div>
-      </section>
-
-      <section className="settings-section">
-        <h2>System Information</h2>
-        <div className="system-info">
-          <p><strong>Version:</strong> {version?.version || 'Unknown'}</p>
-          <p><strong>Status:</strong> {health?.status || 'Unknown'}</p>
-          <p><strong>Mount Status:</strong> {health?.mount_status || 'Unknown'}</p>
-        </div>
-      </section>
+    <Box>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+        <Typography variant="h1">Settings</Typography>
+        <Button variant="contained" onClick={handleSave} disabled={saving || loading}>
+          {saving ? 'Saving...' : 'Save Settings'}
+        </Button>
+      </Box>
 
       {restartRequired && (
-        <div className="alert alert-warning">
-          ⚠️ Worker count changed. Restart CloudUnify for changes to take effect.
-        </div>
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          Worker count changed. Restart CloudUnify for changes to take effect.
+        </Alert>
       )}
 
-      <div className="settings-actions">
-        <button className="btn btn-primary" onClick={handleSave} disabled={saving || loading}>
-          {saving ? 'Saving...' : 'Save Settings'}
-        </button>
-      </div>
-    </div>
+      {/* Storage & Cache Row */}
+      <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5, textTransform: 'uppercase', letterSpacing: 1 }}>
+        Storage
+      </Typography>
+      <Grid container spacing={2} sx={{ mb: 4 }}>
+        <Grid item xs={12} md={6}>
+          <SettingsSection icon={<StorageIcon />} title="Mount Point">
+            <TextField
+              fullWidth
+              size="small"
+              label="Virtual Drive Location"
+              value={settings.mountPath}
+              onChange={(e) => handleChange('mountPath', e.target.value)}
+              helperText="Where CloudUnify mounts the virtual drive"
+            />
+          </SettingsSection>
+        </Grid>
+        <Grid item xs={12} md={6}>
+          <SettingsSection icon={<StorageIcon />} title="Cache">
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={settings.cacheEnabled}
+                  onChange={(e) => handleChange('cacheEnabled', e.target.checked)}
+                />
+              }
+              label="Enable local cache"
+            />
+            <TextField
+              fullWidth
+              size="small"
+              type="number"
+              label="Cache Size (GB)"
+              value={settings.cacheSizeGB}
+              onChange={(e) => handleChange('cacheSizeGB', parseInt(e.target.value))}
+              disabled={!settings.cacheEnabled}
+              inputProps={{ min: 1, max: 100 }}
+              sx={{ mt: 1 }}
+            />
+          </SettingsSection>
+        </Grid>
+      </Grid>
+
+      {/* Sync Row */}
+      <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5, textTransform: 'uppercase', letterSpacing: 1 }}>
+        Sync Settings
+      </Typography>
+      <Grid container spacing={2} sx={{ mb: 4 }}>
+        <Grid item xs={12} md={4}>
+          <SettingsSection icon={<SyncIcon />} title="Workers">
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={settings.autoSync}
+                  onChange={(e) => handleChange('autoSync', e.target.checked)}
+                />
+              }
+              label="Auto-sync files"
+            />
+            <Stack direction="row" spacing={2} sx={{ mt: 1 }}>
+              <TextField
+                fullWidth
+                size="small"
+                type="number"
+                label="Upload"
+                value={settings.uploadWorkers}
+                onChange={(e) => handleChange('uploadWorkers', parseInt(e.target.value))}
+                inputProps={{ min: 1, max: 10 }}
+              />
+              <TextField
+                fullWidth
+                size="small"
+                type="number"
+                label="Download"
+                value={settings.downloadWorkers}
+                onChange={(e) => handleChange('downloadWorkers', parseInt(e.target.value))}
+                inputProps={{ min: 1, max: 10 }}
+              />
+            </Stack>
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+              Restart required after changing worker counts
+            </Typography>
+          </SettingsSection>
+        </Grid>
+
+        <Grid item xs={12} md={4}>
+          <SettingsSection icon={<TimerIcon />} title="Timeouts">
+            <Stack spacing={2}>
+              <TextField
+                fullWidth
+                size="small"
+                type="number"
+                label="Download Timeout (sec)"
+                value={settings.downloadTimeoutSeconds}
+                onChange={(e) =>
+                  handleChange('downloadTimeoutSeconds', Math.max(5, Math.min(300, parseInt(e.target.value) || 30)))
+                }
+                inputProps={{ min: 5, max: 300 }}
+                helperText="5-300 seconds"
+              />
+              <TextField
+                fullWidth
+                size="small"
+                type="number"
+                label="Stale Job Timeout (min)"
+                value={settings.staleJobTimeoutMinutes}
+                onChange={(e) =>
+                  handleChange('staleJobTimeoutMinutes', Math.max(5, Math.min(120, parseInt(e.target.value) || 30)))
+                }
+                inputProps={{ min: 5, max: 120 }}
+                helperText="Reset stuck jobs after timeout"
+              />
+            </Stack>
+          </SettingsSection>
+        </Grid>
+
+        <Grid item xs={12} md={4}>
+          <SettingsSection icon={<ReplayIcon />} title="Retry Policy">
+            <Typography variant="caption" color="text.secondary" sx={{ mb: 1.5, display: 'block' }}>
+              Max retries per error type (0-10)
+            </Typography>
+            <Grid container spacing={1}>
+              <Grid item xs={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  type="number"
+                  label="Network"
+                  value={settings.retryPolicy.networkRetries}
+                  onChange={(e) => handleRetryPolicyChange('networkRetries', e.target.value)}
+                  inputProps={{ min: 0, max: 10 }}
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  type="number"
+                  label="Rate Limit"
+                  value={settings.retryPolicy.rateLimitRetries}
+                  onChange={(e) => handleRetryPolicyChange('rateLimitRetries', e.target.value)}
+                  inputProps={{ min: 0, max: 10 }}
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  type="number"
+                  label="Auth"
+                  value={settings.retryPolicy.authRetries}
+                  onChange={(e) => handleRetryPolicyChange('authRetries', e.target.value)}
+                  inputProps={{ min: 0, max: 10 }}
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  type="number"
+                  label="Quota"
+                  value={settings.retryPolicy.quotaRetries}
+                  onChange={(e) => handleRetryPolicyChange('quotaRetries', e.target.value)}
+                  inputProps={{ min: 0, max: 10 }}
+                />
+              </Grid>
+            </Grid>
+          </SettingsSection>
+        </Grid>
+      </Grid>
+
+      {/* System Info Row */}
+      <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5, textTransform: 'uppercase', letterSpacing: 1 }}>
+        System
+      </Typography>
+      <Grid container spacing={2}>
+        <Grid item xs={12} md={6}>
+          <SettingsSection icon={<InfoIcon />} title="System Info">
+            <Stack spacing={1.5}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Typography variant="body2" color="text.secondary">Version</Typography>
+                <Typography variant="body2" fontWeight={500}>{version?.version || 'Unknown'}</Typography>
+              </Box>
+              <Divider />
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Typography variant="body2" color="text.secondary">Status</Typography>
+                <Chip
+                  label={health?.status || 'Unknown'}
+                  size="small"
+                  color={health?.status === 'healthy' ? 'success' : 'default'}
+                />
+              </Box>
+              <Divider />
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Typography variant="body2" color="text.secondary">Mount Status</Typography>
+                <Chip
+                  label={health?.mount_status || 'Unknown'}
+                  size="small"
+                  color={health?.mount_status === 'mounted' ? 'success' : 'warning'}
+                />
+              </Box>
+            </Stack>
+          </SettingsSection>
+        </Grid>
+        <Grid item xs={12} md={6}>
+          <SettingsSection icon={<TimerIcon />} title="Cleanup">
+            <TextField
+              fullWidth
+              size="small"
+              type="number"
+              label="Job Retention (hours)"
+              value={settings.completedJobRetentionHours}
+              onChange={(e) =>
+                handleChange('completedJobRetentionHours', Math.max(1, Math.min(168, parseInt(e.target.value) || 24)))
+              }
+              inputProps={{ min: 1, max: 168 }}
+              helperText="How long to keep completed sync jobs in history (1-168 hours)"
+            />
+          </SettingsSection>
+        </Grid>
+      </Grid>
+    </Box>
   );
 }
 

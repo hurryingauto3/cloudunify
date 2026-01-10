@@ -50,9 +50,9 @@ type CacheConfig struct {
 
 // RetryPolicy holds retry settings per error type
 type RetryPolicy struct {
-	NetworkRetries int `json:"network_retries"` // Retries for network errors (default: 5)
-	AuthRetries    int `json:"auth_retries"`    // Retries for auth errors (default: 1)
-	QuotaRetries   int `json:"quota_retries"`   // Retries for quota errors (default: 0)
+	NetworkRetries   int `json:"network_retries"`    // Retries for network errors (default: 5)
+	AuthRetries      int `json:"auth_retries"`       // Retries for auth errors (default: 1)
+	QuotaRetries     int `json:"quota_retries"`      // Retries for quota errors (default: 0)
 	RateLimitRetries int `json:"rate_limit_retries"` // Retries for rate limiting (default: 5)
 }
 
@@ -61,12 +61,12 @@ type SyncConfig struct {
 	UploadWorkers   int  `json:"upload_workers"`
 	DownloadWorkers int  `json:"download_workers"`
 	AutoSync        bool `json:"auto_sync"`
-	
+
 	// Advanced settings (live reload)
-	DownloadTimeoutSeconds    int         `json:"download_timeout_seconds"`     // Timeout for blocking downloads (default: 30, range: 5-300)
-	RetryPolicy               RetryPolicy `json:"retry_policy"`                 // Retry counts per error type
-	CompletedJobRetentionHours int        `json:"completed_job_retention_hours"` // Hours to keep completed jobs (default: 24, range: 1-168)
-	StaleJobTimeoutMinutes    int         `json:"stale_job_timeout_minutes"`    // Minutes before processing jobs are considered stale (default: 30, range: 5-120)
+	DownloadTimeoutSeconds     int         `json:"download_timeout_seconds"`      // Timeout for blocking downloads (default: 30, range: 5-300)
+	RetryPolicy                RetryPolicy `json:"retry_policy"`                  // Retry counts per error type
+	CompletedJobRetentionHours int         `json:"completed_job_retention_hours"` // Hours to keep completed jobs (default: 24, range: 1-168)
+	StaleJobTimeoutMinutes     int         `json:"stale_job_timeout_minutes"`     // Minutes before processing jobs are considered stale (default: 30, range: 5-120)
 }
 
 // APIConfig holds HTTP API server settings
@@ -91,10 +91,10 @@ func DefaultConfig(paths *Paths) *Config {
 			Path:      paths.CacheDir,
 		},
 		Sync: SyncConfig{
-			UploadWorkers:   3,
-			DownloadWorkers: 5,
-			AutoSync:        true,
-			DownloadTimeoutSeconds:    30,
+			UploadWorkers:          3,
+			DownloadWorkers:        5,
+			AutoSync:               true,
+			DownloadTimeoutSeconds: 30,
 			RetryPolicy: RetryPolicy{
 				NetworkRetries:   5,
 				AuthRetries:      1,

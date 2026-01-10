@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Box, Typography, Grid, CircularProgress } from '@mui/material';
 import { getProviders, deleteProvider, refreshProviderToken } from '../services/api';
 import StorageDashboard from '../components/StorageDashboard';
 import SyncProgress from '../components/SyncProgress';
@@ -51,18 +52,31 @@ function Dashboard() {
   };
 
   if (loading) {
-    return <div className="loading">Loading...</div>;
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}>
+        <CircularProgress />
+      </Box>
+    );
   }
 
   return (
-    <div className="dashboard-page">
-      <StorageDashboard
-        providers={providers}
-        onRemoveProvider={handleRemoveProvider}
-        onRefreshProvider={handleRefreshProvider}
-      />
-      <SyncProgress />
-    </div>
+    <Box>
+      <Typography variant="h1" sx={{ mb: 3 }}>
+        Dashboard
+      </Typography>
+      <Grid container spacing={3}>
+        <Grid item xs={12} lg={8}>
+          <StorageDashboard
+            providers={providers}
+            onRemoveProvider={handleRemoveProvider}
+            onRefreshProvider={handleRefreshProvider}
+          />
+        </Grid>
+        <Grid item xs={12} lg={4}>
+          <SyncProgress />
+        </Grid>
+      </Grid>
+    </Box>
   );
 }
 

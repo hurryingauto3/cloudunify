@@ -114,7 +114,7 @@ func main() {
 	// Initialize API server with provider manager
 	apiAddress := cfg.APIAddress()
 	apiServer := api.NewServer(apiAddress, db, allocator, syncEngine, providerManager)
-	
+
 	// Inject config manager into handlers for config API
 	apiServer.Handlers().SetConfigManager(configManager)
 
