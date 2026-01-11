@@ -88,6 +88,7 @@ function AppContent() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/files" element={<Files />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/setup" element={<Setup />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Box>

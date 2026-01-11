@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box,
   Card,
@@ -17,6 +18,7 @@ import GoogleIcon from '@mui/icons-material/Google';
 import CloudIcon from '@mui/icons-material/Cloud';
 import AppleIcon from '@mui/icons-material/Apple';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { addProvider, getOAuthStatus, getProviders } from '../services/api';
 
 const providerOptions = [
@@ -46,6 +48,9 @@ const providerOptions = [
 const steps = ['Select Providers', 'Connect', 'Ready'];
 
 function SetupWizard({ onComplete }) {
+  const navigate = useNavigate();
+  // Detect if we're in "add provider" mode (accessed from settings vs initial setup)
+  const isAddMode = !onComplete;
   const [activeStep, setActiveStep] = useState(0);
   const [selectedProviders, setSelectedProviders] = useState([]);
   const [connecting, setConnecting] = useState(false);
@@ -193,13 +198,22 @@ function SetupWizard({ onComplete }) {
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', bgcolor: 'background.default', p: 3 }}>
       <Card sx={{ maxWidth: 600, width: '100%' }}>
         <CardContent sx={{ p: 4 }}>
+          {isAddMode && (
+            <Button
+              startIcon={<ArrowBackIcon />}
+              onClick={() => navigate('/settings')}
+              sx={{ mb: 2 }}
+            >
+              Back to Settings
+            </Button>
+          )}
           <Box sx={{ textAlign: 'center', mb: 4 }}>
             <CloudIcon sx={{ fontSize: 48, color: 'primary.main', mb: 2 }} />
             <Typography variant="h4" fontWeight={600} gutterBottom>
-              Welcome to CloudUnify
+              {isAddMode ? 'Add Cloud Provider' : 'Welcome to CloudUnify'}
             </Typography>
             <Typography color="text.secondary">
-              Unify your cloud storage into one virtual drive
+              {isAddMode ? 'Connect another cloud storage provider' : 'Unify your cloud storage into one virtual drive'}
             </Typography>
           </Box>
 
@@ -379,8 +393,8 @@ function SetupWizard({ onComplete }) {
                 </Alert>
               )}
 
-              <Button variant="contained" size="large" onClick={onComplete}>
-                Go to Dashboard
+              <Button variant="contained" size="large" onClick={() => isAddMode ? navigate('/settings') : onComplete()}>
+                {isAddMode ? 'Back to Settings' : 'Go to Dashboard'}
               </Button>
             </Box>
           )}

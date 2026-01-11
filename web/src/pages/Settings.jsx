@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -50,6 +51,7 @@ const providerNames = {
 };
 
 function Settings() {
+  const navigate = useNavigate();
   const [health, setHealth] = useState(null);
   const [version, setVersion] = useState(null);
   const [providers, setProviders] = useState([]);
@@ -216,7 +218,7 @@ function Settings() {
           variant="outlined"
           size="small"
           startIcon={<AddIcon />}
-          onClick={() => window.location.href = '/setup'}
+          onClick={() => navigate('/setup')}
         >
           Add Provider
         </Button>
