@@ -198,7 +198,6 @@ CloudUnify is a cross-provider "virtual disk + policy engine":
 - [ ] Pin/unpin + "free up space" (dehydrate)
 - [x] Search (by path/name) from DB (API exists, UI partial)
 
-
 **Deliverable:** "It behaves like a cloud drive, not a sync toy"
 
 ---
