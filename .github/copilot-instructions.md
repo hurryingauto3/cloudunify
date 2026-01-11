@@ -78,10 +78,10 @@ func (fs *CloudUnifyFS) Read(...) int {
 ## Key Patterns
 
 ### File Upload Flow
-1. FUSE `Create` → Create staging file in `~/Library/Caches/CloudUnify/staging/`
-2. FUSE `Write` → Write to staging file
-3. FUSE `Release` → Queue upload to sync engine
-4. Sync worker → Upload to cloud provider
+1. FUSE `Create`  ->  Create staging file in `~/Library/Caches/CloudUnify/staging/`
+2. FUSE `Write`  ->  Write to staging file
+3. FUSE `Release`  ->  Queue upload to sync engine
+4. Sync worker  ->  Upload to cloud provider
 5. Update database with cloud file ID
 
 ### Provider Interface
@@ -97,7 +97,7 @@ type CloudProvider interface {
 
 ### Database Tables
 - `providers` - Cloud provider configs and OAuth tokens
-- `files` - Virtual path → cloud file mapping
+- `files` - Virtual path  ->  cloud file mapping
 - `sync_queue` - Pending upload/download operations
 - `cache` - Local file cache tracking
 

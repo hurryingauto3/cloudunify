@@ -14,7 +14,7 @@ A cross-platform virtual filesystem that unifies multiple cloud storage provider
 **Last Updated:** 2026-01-11  
 **Current Phase:** Phase 1 (Daily Driver)
 
-### ✅ Completed
+### Completed
 - FUSE virtual filesystem mounted at `~/CloudUnify`
 - Drag-and-drop file upload via Finder and terminal
 - Google Drive OAuth 2.0 authentication
@@ -30,13 +30,13 @@ A cross-platform virtual filesystem that unifies multiple cloud storage provider
 - **Storage allocator** (balanced usage policy)
 - **Quota-aware placement**
 
-### 🚧 In Progress (Phase 1)
+### In Progress (Phase 1)
 - Range reads for large video seeking
 - Pin/unpin + "free up space"
 - Menubar/tray app
 - UI search
 
-### 📋 Planned (Phase 2+)
+### Planned (Phase 2+)
 - OneDrive integration
 - iCloud integration
 - Finder badges + context menu (macOS)
@@ -50,8 +50,8 @@ A cross-platform virtual filesystem that unifies multiple cloud storage provider
 CloudUnify is a cross-provider "virtual disk + policy engine":
 
 - **Namespace unification:** One tree, many providers
-- **Hydration:** Online-only placeholders → download on open/seek
-- **Write path:** Staging → policy decides placement → background upload
+- **Hydration:** Online-only placeholders  ->  download on open/seek
+- **Write path:** Staging  ->  policy decides placement  ->  background upload
 - **Policy:** Allocation, redundancy, retention, cache, priorities
 - **OS integration:** Status badges, context menus, background daemon, notifications
 
@@ -95,9 +95,9 @@ CloudUnify is a cross-provider "virtual disk + policy engine":
 
 | # | Feature | Description |
 |---|---------|-------------|
-| D1 | Placement policies | Balanced usage (default), cheapest/most-free, provider affinity by folder (e.g., /Movies → Drive), file-type policy |
+| D1 | Placement policies | Balanced usage (default), cheapest/most-free, provider affinity by folder (e.g., /Movies  ->  Drive), file-type policy |
 | D2 | Redundancy modes | None (single provider), Mirror x2 (two providers), Mirror xN (all selected providers) |
-| D3 | Consistency model for redundancy | Write once → fan-out uploads; atomic virtual commit after quorum <br> Read preference: nearest cached / healthiest provider |
+| D3 | Consistency model for redundancy | Write once  ->  fan-out uploads; atomic virtual commit after quorum <br> Read preference: nearest cached / healthiest provider |
 | D4 | Repair tool | Detect missing replica and re-seed |
 | D5 | User controls | Per-folder redundancy settings (scalable UX) |
 
@@ -171,7 +171,7 @@ CloudUnify is a cross-provider "virtual disk + policy engine":
 
 ## Implementation Roadmap
 
-### Phase 0 — Hardening the Core ✅ COMPLETE
+### Phase 0 — Hardening the Core COMPLETE
 
 **Focus:** Reliability and foundation
 
@@ -181,8 +181,8 @@ CloudUnify is a cross-provider "virtual disk + policy engine":
 - [x] Solid file mapping (`virtual_path ↔ cloud_id`)
 - [x] Basic UI queue visibility
 
-**Deliverable:** "Drop file → upload reliably; restart doesn't break; queue visible"  
-**Status:** ✅ Complete as of 2026-01-11
+**Deliverable:** "Drop file  ->  upload reliably; restart doesn't break; queue visible"  
+**Status:** Complete as of 2026-01-11
 
 ---
 
@@ -328,66 +328,66 @@ This allows rapid iteration on core functionality while building toward the nati
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Web UI (React)                          │
-│  - Setup Wizard (OAuth flows)                               │
-│  - Storage Dashboard (usage visualization)                  │
-│  - File Browser (virtual filesystem view)                   │
-│  - Settings (provider management, sync preferences)         │
-└────────────────────────┬────────────────────────────────────┘
-                         │ HTTP/WS (localhost:8080)
-┌────────────────────────▼────────────────────────────────────┐
-│              CloudUnify Service (Go)                        │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │              REST API Server                        │   │
-│  │  - /api/providers (list, add, remove)               │   │
-│  │  - /api/storage (usage stats)                       │   │
-│  │  - /api/files (browse cloud files)                  │   │
-│  │  - /api/sync (trigger operations)                   │   │
-│  │  - /ws (WebSocket for real-time updates)            │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │          FUSE Virtual Filesystem                    │   │
-│  │  - Mount at ~/CloudUnify (configurable)             │   │
-│  │  - Intercept file operations (read/write/delete)    │   │
-│  │  - Stream files on-demand from cloud                │   │
-│  │  - Handle local caching                             │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │            Sync Engine                              │   │
-│  │  - Upload Queue (priority-based)                    │   │
-│  │  - Download Queue (on-demand)                       │   │
-│  │  - Worker Pool (configurable concurrency)           │   │
-│  │  - Retry Logic (exponential backoff)                │   │
-│  │  - Progress Tracking                                │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │         Cloud Provider Clients                      │   │
-│  │  - GoogleDriveClient (OAuth2 + Drive API v3)        │   │
-│  │  - OneDriveClient (OAuth2 + Graph API)              │   │
-│  │  - iCloudClient (WebDAV/CloudKit)                   │   │
-│  │  - Interface: Upload/Download/Delete/List/GetQuota  │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │         Storage Allocation Strategy                 │   │
-│  │  - Algorithm: Balance by usage percentage           │   │
-│  │  - Fallback: Most available space                   │   │
-│  │  - Constraint: One file = one provider (no split)   │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │         Metadata Database (SQLite)                  │   │
-│  │  - Files table (path, provider, cloud_id, size)     │   │
-│  │  - Providers table (name, type, quota, used)        │   │
-│  │  - SyncQueue table (pending operations)             │   │
-│  │  - Cache table (local file cache tracking)          │   │
-│  └─────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
++-------------------------------------------------------------+
+|                     Web UI (React)                          |
+|  - Setup Wizard (OAuth flows)                               |
+|  - Storage Dashboard (usage visualization)                  |
+|  - File Browser (virtual filesystem view)                   |
+|  - Settings (provider management, sync preferences)         |
++------------------------+------------------------------------+
+                         | HTTP/WS (localhost:8080)
++------------------------v------------------------------------+
+|              CloudUnify Service (Go)                        |
+|                                                             |
+|  +-----------------------------------------------------+   |
+|  |              REST API Server                        |   |
+|  |  - /api/providers (list, add, remove)               |   |
+|  |  - /api/storage (usage stats)                       |   |
+|  |  - /api/files (browse cloud files)                  |   |
+|  |  - /api/sync (trigger operations)                   |   |
+|  |  - /ws (WebSocket for real-time updates)            |   |
+|  +-----------------------------------------------------+   |
+|                                                             |
+|  +-----------------------------------------------------+   |
+|  |          FUSE Virtual Filesystem                    |   |
+|  |  - Mount at ~/CloudUnify (configurable)             |   |
+|  |  - Intercept file operations (read/write/delete)    |   |
+|  |  - Stream files on-demand from cloud                |   |
+|  |  - Handle local caching                             |   |
+|  +-----------------------------------------------------+   |
+|                                                             |
+|  +-----------------------------------------------------+   |
+|  |            Sync Engine                              |   |
+|  |  - Upload Queue (priority-based)                    |   |
+|  |  - Download Queue (on-demand)                       |   |
+|  |  - Worker Pool (configurable concurrency)           |   |
+|  |  - Retry Logic (exponential backoff)                |   |
+|  |  - Progress Tracking                                |   |
+|  +-----------------------------------------------------+   |
+|                                                             |
+|  +-----------------------------------------------------+   |
+|  |         Cloud Provider Clients                      |   |
+|  |  - GoogleDriveClient (OAuth2 + Drive API v3)        |   |
+|  |  - OneDriveClient (OAuth2 + Graph API)              |   |
+|  |  - iCloudClient (WebDAV/CloudKit)                   |   |
+|  |  - Interface: Upload/Download/Delete/List/GetQuota  |   |
+|  +-----------------------------------------------------+   |
+|                                                             |
+|  +-----------------------------------------------------+   |
+|  |         Storage Allocation Strategy                 |   |
+|  |  - Algorithm: Balance by usage percentage           |   |
+|  |  - Fallback: Most available space                   |   |
+|  |  - Constraint: One file = one provider (no split)   |   |
+|  +-----------------------------------------------------+   |
+|                                                             |
+|  +-----------------------------------------------------+   |
+|  |         Metadata Database (SQLite)                  |   |
+|  |  - Files table (path, provider, cloud_id, size)     |   |
+|  |  - Providers table (name, type, quota, used)        |   |
+|  |  - SyncQueue table (pending operations)             |   |
+|  |  - Cache table (local file cache tracking)          |   |
+|  +-----------------------------------------------------+   |
++-------------------------------------------------------------+
 ```
 
 ---
@@ -475,77 +475,77 @@ CREATE INDEX idx_cache_last_accessed ON cache(last_accessed);
 
 ```
 cloud-storage-sync/
-├── cmd/
-│   └── cloudunify/
-│       └── main.go                    # Entry point, starts service
-├── internal/
-│   ├── api/
-│   │   ├── server.go                  # HTTP server setup
-│   │   ├── handlers.go                # REST API handlers
-│   │   └── websocket.go               # WebSocket handler
-│   ├── fuse/
-│   │   ├── filesystem.go              # FUSE implementation
-│   │   ├── operations.go              # File operations (read/write/etc)
-│   │   └── cache.go                   # Local file caching
-│   ├── providers/
-│   │   ├── interface.go               # CloudProvider interface
-│   │   ├── google_drive.go            # Google Drive implementation
-│   │   ├── onedrive.go                # OneDrive implementation
-│   │   ├── icloud.go                  # iCloud implementation
-│   │   └── oauth.go                   # OAuth flow helpers
-│   ├── sync/
-│   │   ├── engine.go                  # Sync engine coordinator
-│   │   ├── upload.go                  # Upload worker
-│   │   ├── download.go                # Download worker
-│   │   └── queue.go                   # Queue management
-│   ├── storage/
-│   │   ├── allocator.go               # Storage allocation strategy
-│   │   └── tracker.go                 # Usage tracking
-│   ├── database/
-│   │   ├── db.go                      # Database connection
-│   │   ├── models.go                  # Data models
-│   │   └── migrations.go              # Schema migrations
-│   └── config/
-│       ├── config.go                  # Configuration management
-│       └── paths.go                   # Platform-specific paths
-├── web/
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── SetupWizard.jsx        # Initial setup flow
-│   │   │   ├── StorageDashboard.jsx   # Usage visualization
-│   │   │   ├── FileBrowser.jsx        # File listing
-│   │   │   ├── ProviderCard.jsx       # Provider status card
-│   │   │   └── SyncProgress.jsx       # Upload/download progress
-│   │   ├── pages/
-│   │   │   ├── Setup.jsx              # Setup page
-│   │   │   ├── Dashboard.jsx          # Main dashboard
-│   │   │   ├── Files.jsx              # File browser page
-│   │   │   └── Settings.jsx           # Settings page
-│   │   ├── services/
-│   │   │   ├── api.js                 # API client
-│   │   │   └── websocket.js           # WebSocket client
-│   │   ├── App.jsx                    # Root component
-│   │   └── main.jsx                   # Entry point
-│   ├── index.html
-│   ├── package.json
-│   └── vite.config.js
-├── pkg/
-│   └── (reusable packages if needed)
-├── scripts/
-│   ├── build.sh                       # Build script
-│   ├── package-macos.sh               # macOS packaging
-│   ├── package-windows.sh             # Windows packaging
-│   └── package-linux.sh               # Linux packaging
-├── docs/
-│   ├── API.md                         # API documentation
-│   ├── DEVELOPMENT.md                 # Development guide
-│   └── USER_GUIDE.md                  # User documentation
-├── go.mod
-├── go.sum
-├── Makefile
-├── README.md
-├── SPEC.md                            # This file
-└── .gitignore
+|-- cmd/
+|   +-- cloudunify/
+|       +-- main.go                    # Entry point, starts service
+|-- internal/
+|   |-- api/
+|   |   |-- server.go                  # HTTP server setup
+|   |   |-- handlers.go                # REST API handlers
+|   |   +-- websocket.go               # WebSocket handler
+|   |-- fuse/
+|   |   |-- filesystem.go              # FUSE implementation
+|   |   |-- operations.go              # File operations (read/write/etc)
+|   |   +-- cache.go                   # Local file caching
+|   |-- providers/
+|   |   |-- interface.go               # CloudProvider interface
+|   |   |-- google_drive.go            # Google Drive implementation
+|   |   |-- onedrive.go                # OneDrive implementation
+|   |   |-- icloud.go                  # iCloud implementation
+|   |   +-- oauth.go                   # OAuth flow helpers
+|   |-- sync/
+|   |   |-- engine.go                  # Sync engine coordinator
+|   |   |-- upload.go                  # Upload worker
+|   |   |-- download.go                # Download worker
+|   |   +-- queue.go                   # Queue management
+|   |-- storage/
+|   |   |-- allocator.go               # Storage allocation strategy
+|   |   +-- tracker.go                 # Usage tracking
+|   |-- database/
+|   |   |-- db.go                      # Database connection
+|   |   |-- models.go                  # Data models
+|   |   +-- migrations.go              # Schema migrations
+|   +-- config/
+|       |-- config.go                  # Configuration management
+|       +-- paths.go                   # Platform-specific paths
+|-- web/
+|   |-- src/
+|   |   |-- components/
+|   |   |   |-- SetupWizard.jsx        # Initial setup flow
+|   |   |   |-- StorageDashboard.jsx   # Usage visualization
+|   |   |   |-- FileBrowser.jsx        # File listing
+|   |   |   |-- ProviderCard.jsx       # Provider status card
+|   |   |   +-- SyncProgress.jsx       # Upload/download progress
+|   |   |-- pages/
+|   |   |   |-- Setup.jsx              # Setup page
+|   |   |   |-- Dashboard.jsx          # Main dashboard
+|   |   |   |-- Files.jsx              # File browser page
+|   |   |   +-- Settings.jsx           # Settings page
+|   |   |-- services/
+|   |   |   |-- api.js                 # API client
+|   |   |   +-- websocket.js           # WebSocket client
+|   |   |-- App.jsx                    # Root component
+|   |   +-- main.jsx                   # Entry point
+|   |-- index.html
+|   |-- package.json
+|   +-- vite.config.js
+|-- pkg/
+|   +-- (reusable packages if needed)
+|-- scripts/
+|   |-- build.sh                       # Build script
+|   |-- package-macos.sh               # macOS packaging
+|   |-- package-windows.sh             # Windows packaging
+|   +-- package-linux.sh               # Linux packaging
+|-- docs/
+|   |-- API.md                         # API documentation
+|   |-- DEVELOPMENT.md                 # Development guide
+|   +-- USER_GUIDE.md                  # User documentation
+|-- go.mod
+|-- go.sum
+|-- Makefile
+|-- README.md
+|-- SPEC.md                            # This file
++-- .gitignore
 ```
 
 ---
@@ -646,70 +646,70 @@ type StorageAllocator interface {
 ### Upload Flow
 ```
 1. User copies file to ~/CloudUnify/Movies/video.mp4
-   ↓
+   v
 2. FUSE intercepts write operation
-   ↓
+   v
 3. File written to temporary staging area (~/.cloudunify/staging/)
-   ↓
+   v
 4. Create entry in sync_queue table (operation='upload')
-   ↓
+   v
 5. Sync engine picks up job
-   ↓
+   v
 6. StorageAllocator chooses provider (e.g., Google Drive has most space)
-   ↓
+   v
 7. Upload worker starts streaming upload
-   ↓
+   v
 8. Progress updates sent via WebSocket to UI
-   ↓
+   v
 9. On success:
    - Create entry in files table
    - Update provider usage in providers table
    - Mark sync_queue entry as completed
    - Delete staging file (or move to cache)
-   ↓
+   v
 10. FUSE now shows file as available in virtual filesystem
 ```
 
 ### Download Flow
 ```
 1. User opens ~/CloudUnify/Movies/video.mp4
-   ↓
+   v
 2. FUSE intercepts read operation
-   ↓
+   v
 3. Check cache table for local copy
-   ↓
+   v
 4. If cached:
    - Update last_accessed timestamp
    - Return file from cache
-   ↓
+   v
 5. If not cached:
    - Query files table for cloud location
    - Get provider and cloud_file_id
    - Create download job in sync_queue
-   ↓
+   v
 6. Download worker streams file from provider
-   ↓
+   v
 7. Stream data directly to application (no wait for full download)
-   ↓
+   v
 8. Simultaneously write to cache
-   ↓
+   v
 9. Progress updates sent via WebSocket to UI
-   ↓
+   v
 10. On completion, update cache table
 ```
 
 ### Delete Flow
 ```
 1. User deletes ~/CloudUnify/Movies/video.mp4
-   ↓
+   v
 2. FUSE intercepts unlink operation
-   ↓
+   v
 3. Look up file in files table
-   ↓
+   v
 4. Create delete job in sync_queue
-   ↓
+   v
 5. Delete from cloud provider
-   ↓
+   v
 6. On success:
    - Delete from files table
    - Update provider usage
@@ -764,7 +764,7 @@ POST   /api/shutdown               # Graceful shutdown
 ### WebSocket
 ```
 WS     /ws                         # Real-time updates
-  → Events: sync_progress, file_added, file_deleted, provider_updated, error
+   ->  Events: sync_progress, file_added, file_deleted, provider_updated, error
 ```
 
 ---
