@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Box, Typography, Grid, CircularProgress } from '@mui/material';
-import { getProviders, deleteProvider, refreshProviderToken } from '../services/api';
+import { getProviders, refreshProviderToken } from '../services/api';
 import StorageDashboard from '../components/StorageDashboard';
 import SyncProgress from '../components/SyncProgress';
 import wsService from '../services/websocket';
@@ -33,15 +33,6 @@ function Dashboard() {
     }
   };
 
-  const handleRemoveProvider = async (id) => {
-    try {
-      await deleteProvider(id);
-      setProviders((prev) => prev.filter((p) => p.id !== id));
-    } catch (err) {
-      console.error('Failed to remove provider:', err);
-    }
-  };
-
   const handleRefreshProvider = async (id) => {
     try {
       await refreshProviderToken(id);
@@ -68,7 +59,6 @@ function Dashboard() {
         <Grid item xs={12} lg={8}>
           <StorageDashboard
             providers={providers}
-            onRemoveProvider={handleRemoveProvider}
             onRefreshProvider={handleRefreshProvider}
           />
         </Grid>

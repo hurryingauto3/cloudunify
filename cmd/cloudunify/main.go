@@ -91,6 +91,19 @@ func main() {
 	syncEngine.UpdateConfig(cfg.Sync)
 	log.Println("Sync engine initialized")
 
+	// Initialize API server with provider manager
+	apiAddress := cfg.APIAddress()
+	apiServer := api.NewServer(apiAddress, db, allocator, syncEngine, providerManager)
+
+	// Inject config manager into handlers for config API
+	apiServer.Handlers().SetConfigManager(configManager)
+
+	// Load existing providers from database BEFORE starting sync engine
+	// This ensures metadata sync has access to providers immediately
+	if err := apiServer.Handlers().LoadProvidersFromDB(); err != nil {
+		log.Printf("Warning: Failed to load providers from database: %v", err)
+	}
+
 	// Start sync engine if enabled
 	if !*noSync && cfg.Sync.AutoSync {
 		if err := syncEngine.Start(ctx); err != nil {
@@ -102,7 +115,11 @@ func main() {
 	// Initialize and mount FUSE filesystem if enabled
 	var fuseFS *fuse.CloudUnifyFS
 	if !*noMount {
-		fuseFS = fuse.NewCloudUnifyFS(db, syncEngine, cfg.MountPath, paths.StagingDir)
+		fuseFS = fuse.NewCloudUnifyFS(db, syncEngine, cfg.MountPath, paths.StagingDir, paths.CacheDir)
+
+		// Set download timeout from config
+		fuseFS.SetDownloadTimeout(time.Duration(cfg.Sync.DownloadTimeoutSeconds) * time.Second)
+
 		if err := fuseFS.Mount(); err != nil {
 			log.Printf("Warning: Failed to mount FUSE filesystem: %v", err)
 			log.Println("Continuing without FUSE mount (macFUSE may not be installed)")
@@ -111,12 +128,18 @@ func main() {
 		}
 	}
 
-	// Initialize API server with provider manager
-	apiAddress := cfg.APIAddress()
-	apiServer := api.NewServer(apiAddress, db, allocator, syncEngine, providerManager)
-
-	// Inject config manager into handlers for config API
-	apiServer.Handlers().SetConfigManager(configManager)
+	// Set up FUSE download progress callback to broadcast via WebSocket
+	if fuseFS != nil {
+		fuseFS.SetProgressCallback(func(virtualPath string, downloaded, total int64, status string) {
+			apiServer.BroadcastEvent("download_progress", map[string]interface{}{
+				"path":       virtualPath,
+				"downloaded": downloaded,
+				"total":      total,
+				"percent":    int(float64(downloaded) / float64(total) * 100),
+				"status":     status,
+			})
+		})
+	}
 
 	// Start API server in background
 	go func() {

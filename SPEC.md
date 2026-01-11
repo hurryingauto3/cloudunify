@@ -11,6 +11,9 @@ A cross-platform virtual filesystem that unifies multiple cloud storage provider
 
 ## Implementation Status
 
+**Last Updated:** 2026-01-11  
+**Current Phase:** Phase 1 (Daily Driver)
+
 ### ✅ Completed
 - FUSE virtual filesystem mounted at `~/CloudUnify`
 - Drag-and-drop file upload via Finder and terminal
@@ -21,14 +24,24 @@ A cross-platform virtual filesystem that unifies multiple cloud storage provider
 - REST API on port 8080
 - WebSocket for real-time progress updates
 - React dashboard with Vite
+- **Lazy/deferred download** (files download only when content is read, not on Open)
+- **Provider deletion safety** (sync engine cleanup before DB delete)
+- **Metadata sync from Google Drive** (background indexing)
+- **Storage allocator** (balanced usage policy)
+- **Quota-aware placement**
 
-### 🚧 Planned
+### 🚧 In Progress (Phase 1)
+- Range reads for large video seeking
+- Pin/unpin + "free up space"
+- Menubar/tray app
+- UI search
+
+### 📋 Planned (Phase 2+)
 - OneDrive integration
 - iCloud integration
-- Download on file read (currently upload-only)
-- Smart file distribution across providers
-- File conflict resolution
+- Finder badges + context menu (macOS)
 - Cross-platform packaging
+- Redundancy / mirroring
 
 ---
 
@@ -158,43 +171,45 @@ CloudUnify is a cross-provider "virtual disk + policy engine":
 
 ## Implementation Roadmap
 
-### Phase 0 — Hardening the Core *(Current Phase)*
+### Phase 0 — Hardening the Core ✅ COMPLETE
 
 **Focus:** Reliability and foundation
 
-- [ ] Fix DB nullability issues
-- [ ] Deterministic job state machine
-- [ ] Reliable upload pipeline for Drive (resumable)
-- [ ] Solid file mapping (`virtual_path ↔ cloud_id`)
-- [ ] Basic UI queue visibility
+- [x] Fix DB nullability issues
+- [x] Deterministic job state machine (provider deletion cleanup)
+- [x] Reliable upload pipeline for Drive (resumable)
+- [x] Solid file mapping (`virtual_path ↔ cloud_id`)
+- [x] Basic UI queue visibility
 
-**Deliverable:** "Drop file → upload reliably; restart doesn't break; queue visible"
+**Deliverable:** "Drop file → upload reliably; restart doesn't break; queue visible"  
+**Status:** ✅ Complete as of 2026-01-11
 
 ---
 
-### Phase 1 — Usable as a Daily Driver
+### Phase 1 — Usable as a Daily Driver *(Current Phase — 40%)*
 
 **Focus:** Single provider + on-demand reads
 
-- [ ] Download-on-open + cache
+- [x] Download-on-open + cache (lazy/deferred download implemented 2026-01-11)
 - [ ] Range reads for large video seeking
 - [ ] Pin/unpin + "free up space" (dehydrate)
-- [ ] Search (by path/name) from DB
+- [x] Search (by path/name) from DB (API exists, UI partial)
 - [ ] Basic menubar/tray with pause/resume
 
 **Deliverable:** "It behaves like a cloud drive, not a sync toy"
 
 ---
 
-### Phase 2 — Unified Browse Across Providers
+### Phase 2 — Unified Browse Across Providers *(30%)*
 
 **Focus:** Multi-provider namespace
 
-- [ ] Provider folders + merged view option
-- [ ] OneDrive integration
+- [x] Provider folders + merged view option (single merged tree exists)
+- [ ] OneDrive integration (stub only)
+- [ ] iCloud integration (stub only)
 - [ ] Cross-provider move/copy semantics (defined rules)
-- [ ] Allocation policy (balanced usage)
-- [ ] Quota-aware placement
+- [x] Allocation policy (balanced usage)
+- [x] Quota-aware placement
 
 **Deliverable:** "3TB pooled namespace, seamless browsing"
 

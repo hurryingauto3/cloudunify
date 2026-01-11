@@ -2,6 +2,8 @@ package fuse
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -12,8 +14,12 @@ import (
 	"github.com/winfsp/cgofuse/fuse"
 
 	"cloudunify/internal/database"
+	"cloudunify/internal/providers"
 	"cloudunify/internal/sync"
 )
+
+// DownloadProgressCallback is called with download progress updates
+type DownloadProgressCallback func(virtualPath string, downloaded, total int64, status string)
 
 // CloudUnifyFS implements the FUSE filesystem interface
 type CloudUnifyFS struct {
@@ -23,6 +29,16 @@ type CloudUnifyFS struct {
 	syncEngine *sync.Engine
 	mountPath  string
 	stagingDir string
+	cacheDir   string
+
+	// Cache manager for downloaded files
+	cacheManager *CacheManager
+
+	// Progress callback for download updates
+	progressCallback DownloadProgressCallback
+
+	// Download timeout (default 30s)
+	downloadTimeout time.Duration
 
 	// File handles
 	handles   map[uint64]*FileHandle
@@ -32,6 +48,10 @@ type CloudUnifyFS struct {
 	// Pending files (files being written but not yet uploaded)
 	pendingFiles   map[string]*PendingFile
 	pendingFilesMu gosync.RWMutex
+
+	// Active downloads tracking
+	activeDownloads   map[string]chan struct{}
+	activeDownloadsMu gosync.Mutex
 
 	// Context for operations
 	ctx    context.Context
@@ -56,19 +76,37 @@ type FileHandle struct {
 }
 
 // NewCloudUnifyFS creates a new CloudUnify filesystem
-func NewCloudUnifyFS(db *database.DB, syncEngine *sync.Engine, mountPath, stagingDir string) *CloudUnifyFS {
+func NewCloudUnifyFS(db *database.DB, syncEngine *sync.Engine, mountPath, stagingDir, cacheDir string) *CloudUnifyFS {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// Create cache manager with 10GB default limit
+	cacheManager := NewCacheManager(db, cacheDir, 10)
+
 	return &CloudUnifyFS{
-		db:           db,
-		syncEngine:   syncEngine,
-		mountPath:    mountPath,
-		stagingDir:   stagingDir,
-		handles:      make(map[uint64]*FileHandle),
-		pendingFiles: make(map[string]*PendingFile),
-		nextFH:       1,
-		ctx:          ctx,
-		cancel:       cancel,
+		db:              db,
+		syncEngine:      syncEngine,
+		mountPath:       mountPath,
+		stagingDir:      stagingDir,
+		cacheDir:        cacheDir,
+		cacheManager:    cacheManager,
+		downloadTimeout: 30 * time.Second,
+		handles:         make(map[uint64]*FileHandle),
+		pendingFiles:    make(map[string]*PendingFile),
+		activeDownloads: make(map[string]chan struct{}),
+		nextFH:          1,
+		ctx:             ctx,
+		cancel:          cancel,
 	}
+}
+
+// SetProgressCallback sets the callback for download progress updates
+func (fs *CloudUnifyFS) SetProgressCallback(callback DownloadProgressCallback) {
+	fs.progressCallback = callback
+}
+
+// SetDownloadTimeout sets the download timeout
+func (fs *CloudUnifyFS) SetDownloadTimeout(timeout time.Duration) {
+	fs.downloadTimeout = timeout
 }
 
 // Init is called when the filesystem is mounted
@@ -334,6 +372,134 @@ func (fs *CloudUnifyFS) Create(path string, flags int, mode uint32) (int, uint64
 	return 0, fh
 }
 
+// downloadToCache downloads a file from cloud to cache synchronously
+// Returns the local cache path and any error
+func (fs *CloudUnifyFS) downloadToCache(file *database.File) (string, error) {
+	// Check if another download is already in progress for this file
+	fs.activeDownloadsMu.Lock()
+	if doneChan, exists := fs.activeDownloads[file.VirtualPath]; exists {
+		fs.activeDownloadsMu.Unlock()
+		// Wait for the existing download to complete
+		<-doneChan
+		// Check if file is now cached
+		cachePath, cached, err := fs.cacheManager.GetCachedPath(fs.ctx, file.ID)
+		if err != nil {
+			return "", err
+		}
+		if cached {
+			return cachePath, nil
+		}
+		return "", fmt.Errorf("download completed but file not in cache")
+	}
+
+	// Mark this download as in progress
+	doneChan := make(chan struct{})
+	fs.activeDownloads[file.VirtualPath] = doneChan
+	fs.activeDownloadsMu.Unlock()
+
+	defer func() {
+		fs.activeDownloadsMu.Lock()
+		delete(fs.activeDownloads, file.VirtualPath)
+		close(doneChan)
+		fs.activeDownloadsMu.Unlock()
+	}()
+
+	// Get the provider
+	provider, ok := fs.syncEngine.GetProvider(file.ProviderID)
+	if !ok {
+		return "", fmt.Errorf("provider %d not registered", file.ProviderID)
+	}
+
+	// Create cache directory and file
+	cachePath := fs.cacheManager.GetCachePath(file.VirtualPath)
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {
+		return "", fmt.Errorf("failed to create cache directory: %w", err)
+	}
+
+	cacheFile, err := os.Create(cachePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cache file: %w", err)
+	}
+	defer cacheFile.Close()
+
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(fs.ctx, fs.downloadTimeout)
+	defer cancel()
+
+	// Notify progress: starting
+	if fs.progressCallback != nil {
+		fs.progressCallback(file.VirtualPath, 0, file.SizeBytes, "downloading")
+	}
+
+	log.Printf("FUSE Download: starting download for %s (size: %d bytes)", file.VirtualPath, file.SizeBytes)
+
+	// Try to use DownloadWithProgress if available (Google Drive specific)
+	if gdProvider, ok := provider.(*providers.GoogleDriveProvider); ok {
+		err = gdProvider.DownloadWithProgress(ctx, file.CloudFileID, cacheFile, file.SizeBytes,
+			func(downloaded, total int64) {
+				if fs.progressCallback != nil {
+					fs.progressCallback(file.VirtualPath, downloaded, total, "downloading")
+				}
+			})
+	} else {
+		// Fallback to simple streaming download
+		stream, streamErr := provider.DownloadStream(ctx, file.CloudFileID)
+		if streamErr != nil {
+			os.Remove(cachePath)
+			return "", fmt.Errorf("failed to start download: %w", streamErr)
+		}
+		defer stream.Close()
+
+		var written int64
+		buf := make([]byte, 32*1024)
+		for {
+			n, readErr := stream.Read(buf)
+			if n > 0 {
+				w, writeErr := cacheFile.Write(buf[:n])
+				if writeErr != nil {
+					os.Remove(cachePath)
+					return "", fmt.Errorf("failed to write to cache: %w", writeErr)
+				}
+				written += int64(w)
+				if fs.progressCallback != nil && file.SizeBytes > 0 {
+					fs.progressCallback(file.VirtualPath, written, file.SizeBytes, "downloading")
+				}
+			}
+			if readErr != nil {
+				// Check for EOF (successful end of stream)
+				if readErr == io.EOF {
+					break
+				}
+				// Actual error - fail the download
+				os.Remove(cachePath)
+				return "", fmt.Errorf("failed to read from stream: %w", readErr)
+			}
+		}
+	}
+
+	if err != nil {
+		os.Remove(cachePath)
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("download timeout after %v", fs.downloadTimeout)
+		}
+		return "", fmt.Errorf("download failed: %w", err)
+	}
+
+	// Add to cache database
+	if err := fs.cacheManager.AddToCache(fs.ctx, file.ID, cachePath); err != nil {
+		log.Printf("Warning: failed to add file to cache database: %v", err)
+		// Continue anyway, file is still accessible
+	}
+
+	// Notify progress: complete
+	if fs.progressCallback != nil {
+		fs.progressCallback(file.VirtualPath, file.SizeBytes, file.SizeBytes, "completed")
+	}
+
+	log.Printf("FUSE Download: completed download for %s", file.VirtualPath)
+	return cachePath, nil
+}
+
 // Open opens a file
 func (fs *CloudUnifyFS) Open(path string, flags int) (int, uint64) {
 	// Check if this is a write operation
@@ -424,28 +590,49 @@ func (fs *CloudUnifyFS) Open(path string, flags int) (int, uint64) {
 	}
 
 	var handle *FileHandle
+	var localPath string
+
 	if cache != nil {
-		// File is cached, open it
-		f, err := os.Open(cache.LocalPath)
-		if err != nil {
-			return -fuse.EIO, 0
+		// File is cached, verify it still exists
+		if _, err := os.Stat(cache.LocalPath); err == nil {
+			localPath = cache.LocalPath
+			fs.db.TouchCacheEntry(fs.ctx, cache.ID)
+		} else {
+			// Cache entry is stale, remove it
+			fs.db.DeleteCacheEntry(fs.ctx, cache.ID)
+			cache = nil
 		}
+	}
+
+	if cache == nil {
+		// File not cached, DEFER download until Read() is called.
+		// This prevents aggressive downloading when the OS (Finder/Explorer) accesses checks files
+		// for metadata, thumbnails, or icons without reading the full content.
+		log.Printf("FUSE Open: file %s not cached, deferring download until Read", path)
+
 		handle = &FileHandle{
 			Path:      path,
-			File:      f,
+			File:      nil, // Will be opened in Read()
 			ReadOnly:  true,
 			FileEntry: file,
 		}
-		fs.db.TouchCacheEntry(fs.ctx, cache.ID)
-	} else {
-		// File not cached, need to download
-		// For now, return a handle that will trigger download on read
-		handle = &FileHandle{
-			Path:      path,
-			File:      nil, // Will be populated when download completes
-			ReadOnly:  true,
-			FileEntry: file,
-		}
+
+		fh := fs.allocHandle(handle)
+		return 0, fh
+	}
+
+	// Open the local file (either from cache or freshly downloaded)
+	f, err := os.Open(localPath)
+	if err != nil {
+		log.Printf("FUSE Open: failed to open cached file %s: %v", localPath, err)
+		return -fuse.EIO, 0
+	}
+
+	handle = &FileHandle{
+		Path:      path,
+		File:      f,
+		ReadOnly:  true,
+		FileEntry: file,
 	}
 
 	fh := fs.allocHandle(handle)
@@ -459,10 +646,38 @@ func (fs *CloudUnifyFS) Read(path string, buff []byte, ofst int64, fh uint64) in
 		return -fuse.EBADF
 	}
 
+	// Handle deferred download
 	if handle.File == nil {
-		// File not yet downloaded - return 0 for now
-		// In a full implementation, this would block and download
-		return 0
+		if handle.FileEntry == nil {
+			log.Printf("FUSE Read: invalid handle state (no file, no entry) for %s", path)
+			return -fuse.EIO
+		}
+
+		log.Printf("FUSE Read: accessing content for %s, starting download...", path)
+
+		// This is a deferred download - execute it now
+		// Notify progress: starting
+		if fs.progressCallback != nil {
+			fs.progressCallback(path, 0, handle.FileEntry.SizeBytes, "starting")
+		}
+
+		localPath, err := fs.downloadToCache(handle.FileEntry)
+		if err != nil {
+			log.Printf("FUSE Read: download failed for %s: %v", path, err)
+			// Notify progress: error
+			if fs.progressCallback != nil {
+				fs.progressCallback(path, 0, handle.FileEntry.SizeBytes, "error")
+			}
+			return -fuse.EIO
+		}
+
+		f, err := os.Open(localPath)
+		if err != nil {
+			log.Printf("FUSE Read: failed to open cached file %s: %v", localPath, err)
+			return -fuse.EIO
+		}
+
+		handle.File = f
 	}
 
 	n, err := handle.File.ReadAt(buff, ofst)

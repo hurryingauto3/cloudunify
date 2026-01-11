@@ -244,6 +244,9 @@ func (h *Handlers) HandleDeleteProvider(w http.ResponseWriter, r *http.Request) 
 	// Remove from manager
 	h.providerManager.RemoveProvider(id)
 
+	// Unregister from sync engine
+	h.syncEngine.UnregisterProvider(id)
+
 	if err := h.db.DeleteProvider(r.Context(), id); err != nil {
 		respondError(w, http.StatusInternalServerError, "DB_ERROR", "Failed to delete provider")
 		return
@@ -853,4 +856,38 @@ func (h *Handlers) HandleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		Success:         true,
 		RestartRequired: restartRequired,
 	})
+}
+
+// HandlePinFile pins a file to cache
+func (h *Handlers) HandlePinFile(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, err := strconv.ParseInt(vars["id"], 10, 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid_id", "Invalid file ID")
+		return
+	}
+
+	if err := h.db.UpdateFilePinned(r.Context(), id, true); err != nil {
+		respondError(w, http.StatusInternalServerError, "db_error", "Failed to pin file")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "pinned"})
+}
+
+// HandleUnpinFile unpins a file from cache
+func (h *Handlers) HandleUnpinFile(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, err := strconv.ParseInt(vars["id"], 10, 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid_id", "Invalid file ID")
+		return
+	}
+
+	if err := h.db.UpdateFilePinned(r.Context(), id, false); err != nil {
+		respondError(w, http.StatusInternalServerError, "db_error", "Failed to unpin file")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "unpinned"})
 }

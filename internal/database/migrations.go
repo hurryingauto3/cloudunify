@@ -102,6 +102,15 @@ var migrations = []Migration{
 			DROP TABLE IF EXISTS schema_version;
 		`,
 	},
+	{
+		Version: 2,
+		Up: `
+			ALTER TABLE files ADD COLUMN pinned INTEGER DEFAULT 0;
+		`,
+		Down: `
+			-- No downgrade supported for this column drop in sqlite
+		`,
+	},
 }
 
 // getCurrentVersion returns the current schema version

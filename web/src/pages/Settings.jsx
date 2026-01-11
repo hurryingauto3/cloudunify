@@ -13,13 +13,21 @@ import {
   Chip,
   Divider,
   Stack,
+  IconButton,
+  Tooltip
 } from '@mui/material';
 import StorageIcon from '@mui/icons-material/Storage';
 import SyncIcon from '@mui/icons-material/Sync';
 import TimerIcon from '@mui/icons-material/Timer';
 import ReplayIcon from '@mui/icons-material/Replay';
 import InfoIcon from '@mui/icons-material/Info';
-import { getHealth, getVersion, getConfig, updateConfig } from '../services/api';
+import DeleteIcon from '@mui/icons-material/Delete';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import AddIcon from '@mui/icons-material/Add';
+import GoogleIcon from '@mui/icons-material/Google';
+import CloudIcon from '@mui/icons-material/Cloud';
+import AppleIcon from '@mui/icons-material/Apple';
+import { getHealth, getVersion, getConfig, updateConfig, getProviders, deleteProvider, refreshProviderToken } from '../services/api';
 
 function SettingsSection({ icon, title, children }) {
   return (
@@ -35,9 +43,16 @@ function SettingsSection({ icon, title, children }) {
   );
 }
 
+const providerNames = {
+  google_drive: 'Google Drive',
+  onedrive: 'OneDrive',
+  icloud: 'iCloud',
+};
+
 function Settings() {
   const [health, setHealth] = useState(null);
   const [version, setVersion] = useState(null);
+  const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [restartRequired, setRestartRequired] = useState(false);
@@ -66,6 +81,15 @@ function Settings() {
       setVersion(versionRes.data);
     } catch (err) {
       console.error('Failed to fetch system info:', err);
+    }
+  }, []);
+
+  const fetchProviders = useCallback(async () => {
+    try {
+      const res = await getProviders();
+      setProviders(res.data || []);
+    } catch (err) {
+      console.error('Failed to fetch providers:', err);
     }
   }, []);
 
@@ -100,7 +124,31 @@ function Settings() {
   useEffect(() => {
     fetchSystemInfo();
     fetchConfig();
-  }, [fetchSystemInfo, fetchConfig]);
+    fetchProviders();
+  }, [fetchSystemInfo, fetchConfig, fetchProviders]);
+
+  const handleRemoveProvider = async (id, name) => {
+    if (window.confirm(`Are you sure you want to remove ${name}? Local file references will be removed, but actual files remain in your cloud.`)) {
+      try {
+        await deleteProvider(id);
+        fetchProviders();
+      } catch (err) {
+        console.error('Failed to delete provider:', err);
+        alert('Failed to delete provider');
+      }
+    }
+  };
+
+  const handleRefreshProvider = async (id) => {
+    try {
+      await refreshProviderToken(id);
+      fetchProviders();
+      alert('Token refreshed successfully');
+    } catch (err) {
+      console.error('Failed to refresh token:', err);
+      alert('Failed to refresh token');
+    }
+  };
 
   const handleChange = (key, value) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
@@ -158,6 +206,93 @@ function Settings() {
           Worker count changed. Restart CloudUnify for changes to take effect.
         </Alert>
       )}
+
+      {/* Cloud Providers Row */}
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 1.5 }}>
+        <Typography variant="subtitle2" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 1, flexGrow: 1 }}>
+          Cloud Providers
+        </Typography>
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<AddIcon />}
+          onClick={() => window.location.href = '/setup'}
+        >
+          Add Provider
+        </Button>
+      </Box>
+      <Grid container spacing={2} sx={{ mb: 4 }}>
+        {providers.map((provider) => (
+          <Grid item xs={12} md={6} lg={4} key={provider.id}>
+            <Card sx={{ height: '100%' }}>
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
+                  <Box sx={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center',
+                    width: 36,
+                    height: 36,
+                    borderRadius: 1,
+                    bgcolor: 'action.hover'
+                  }}>
+                    {provider.type === 'google_drive' ? (
+                      <GoogleIcon color="primary" />
+                    ) : provider.type === 'onedrive' ? (
+                      <CloudIcon color="primary" />
+                    ) : (
+                      <AppleIcon />
+                    )}
+                  </Box>
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography variant="subtitle1" fontWeight={600} noWrap>
+                      {providerNames[provider.type] || provider.type}
+                    </Typography>
+                    {provider.name && provider.name !== provider.type && (
+                      <Typography variant="caption" color="text.secondary">
+                        {provider.name}
+                      </Typography>
+                    )}
+                  </Box>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+                  <Chip
+                    size="small"
+                    label={provider.enabled ? 'Active' : 'Disabled'}
+                    color={provider.enabled ? 'success' : 'default'}
+                    variant="outlined"
+                  />
+                </Box>
+                <Divider sx={{ mb: 2 }} />
+                <Stack direction="row" spacing={1} justifyContent="flex-end">
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<RefreshIcon />}
+                    onClick={() => handleRefreshProvider(provider.id)}
+                  >
+                    Refresh
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="error"
+                    startIcon={<DeleteIcon />}
+                    onClick={() => handleRemoveProvider(provider.id, provider.name)}
+                  >
+                    Remove
+                  </Button>
+                </Stack>
+              </CardContent>
+            </Card>
+          </Grid>
+        ))}
+        {providers.length === 0 && (
+          <Grid item xs={12}>
+            <Alert severity="info">No cloud providers connected.</Alert>
+          </Grid>
+        )}
+      </Grid>
 
       {/* Storage & Cache Row */}
       <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5, textTransform: 'uppercase', letterSpacing: 1 }}>
@@ -337,27 +472,31 @@ function Settings() {
       <Grid container spacing={2}>
         <Grid item xs={12} md={6}>
           <SettingsSection icon={<InfoIcon />} title="System Info">
-            <Stack spacing={1.5}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Typography variant="body2" color="text.secondary">Version</Typography>
+            <Stack spacing={2}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ flexShrink: 0 }}>Version</Typography>
                 <Typography variant="body2" fontWeight={500}>{version?.version || 'Unknown'}</Typography>
               </Box>
               <Divider />
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Typography variant="body2" color="text.secondary">Status</Typography>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ flexShrink: 0 }}>Status</Typography>
                 <Chip
                   label={health?.status || 'Unknown'}
                   size="small"
+                  variant="outlined"
                   color={health?.status === 'healthy' ? 'success' : 'default'}
+                  sx={{ flexShrink: 0 }}
                 />
               </Box>
               <Divider />
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Typography variant="body2" color="text.secondary">Mount Status</Typography>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ flexShrink: 0 }}>Mount Status</Typography>
                 <Chip
                   label={health?.mount_status || 'Unknown'}
                   size="small"
+                  variant="outlined"
                   color={health?.mount_status === 'mounted' ? 'success' : 'warning'}
+                  sx={{ flexShrink: 0 }}
                 />
               </Box>
             </Stack>

@@ -137,6 +137,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.wg.Add(1)
 	go e.cleanupWorker()
 
+	// Start metadata sync (runs independently)
+	go e.StartMetadataSync(e.ctx, 5*time.Minute)
+
 	log.Printf("Sync engine started with %d upload workers and %d download workers",
 		e.uploadWorkers, e.downloadWorkers)
 

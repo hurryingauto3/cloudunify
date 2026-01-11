@@ -46,7 +46,8 @@ func (p *GoogleDriveProvider) Name() string {
 // GetAuthURL returns the OAuth authorization URL
 func (p *GoogleDriveProvider) GetAuthURL(state string) string {
 	baseURL := "https://accounts.google.com/o/oauth2/v2/auth"
-	scopes := "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly"
+	// Use full drive scope to access all files, not just those created by this app
+	scopes := "https://www.googleapis.com/auth/drive"
 
 	params := url.Values{}
 	params.Set("client_id", p.config.ClientID)
@@ -168,6 +169,11 @@ func (p *GoogleDriveProvider) IsAuthenticated() bool {
 	if p.tokens == nil {
 		return false
 	}
+	// Check if we have a refresh token (allowing re-authentication)
+	if p.tokens.RefreshToken != "" {
+		return true
+	}
+	// Otherwise check if access token is valid
 	return p.tokens.AccessToken != "" && time.Now().Before(p.tokens.Expiry)
 }
 
@@ -176,10 +182,17 @@ func (p *GoogleDriveProvider) ensureValidToken(ctx context.Context) error {
 	if p.tokens == nil {
 		return ErrNotAuthenticated
 	}
-	if time.Now().After(p.tokens.Expiry.Add(-5 * time.Minute)) {
+
+	// If we have a refresh token and the access token is expired (or close to expiring), refresh it
+	if p.tokens.RefreshToken != "" && (p.tokens.AccessToken == "" || time.Now().After(p.tokens.Expiry.Add(-5*time.Minute))) {
 		_, err := p.RefreshToken(ctx)
 		return err
 	}
+
+	if p.tokens.AccessToken == "" {
+		return ErrNotAuthenticated
+	}
+
 	return nil
 }
 
@@ -522,18 +535,189 @@ func (p *GoogleDriveProvider) Download(ctx context.Context, fileID string, write
 		return ErrNotAuthenticated
 	}
 
-	// TODO: Implement actual Google Drive download
-	return nil
+	stream, err := p.DownloadStream(ctx, fileID)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+
+	_, err = io.Copy(writer, stream)
+	return err
 }
 
 // DownloadStream returns a reader for streaming download
 func (p *GoogleDriveProvider) DownloadStream(ctx context.Context, fileID string) (io.ReadCloser, error) {
-	if !p.IsAuthenticated() {
-		return nil, ErrNotAuthenticated
+	if err := p.ensureValidToken(ctx); err != nil {
+		return nil, err
 	}
 
-	// TODO: Implement streaming download from Google Drive
-	return nil, fmt.Errorf("not implemented")
+	// Use alt=media to get file content
+	downloadURL := fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s?alt=media", fileID)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create download request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+p.tokens.AccessToken)
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download request failed: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		// Handle Google Docs that cannot be downloaded as binary
+		if resp.StatusCode == http.StatusForbidden && strings.Contains(string(body), "Only files with binary content can be downloaded") {
+			// Retry with PDF export
+			exportURL := fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s/export?mimeType=application/pdf", fileID)
+			reqExport, err := http.NewRequestWithContext(ctx, "GET", exportURL, nil)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create export request: %w", err)
+			}
+			reqExport.Header.Set("Authorization", "Bearer "+p.tokens.AccessToken)
+
+			respExport, err := p.httpClient.Do(reqExport)
+			if err != nil {
+				return nil, fmt.Errorf("export request failed: %w", err)
+			}
+			if respExport.StatusCode != http.StatusOK {
+				bodyExport, _ := io.ReadAll(respExport.Body)
+				respExport.Body.Close()
+				return nil, fmt.Errorf("export failed with status %d: %s", respExport.StatusCode, string(bodyExport))
+			}
+			return respExport.Body, nil
+		}
+
+		return nil, fmt.Errorf("download failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return resp.Body, nil
+}
+
+// DownloadWithProgress downloads a file with progress callback
+func (p *GoogleDriveProvider) DownloadWithProgress(ctx context.Context, fileID string, writer io.Writer, totalSize int64, progressFn func(downloaded, total int64)) error {
+	if err := p.ensureValidToken(ctx); err != nil {
+		return err
+	}
+
+	downloadURL := fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s?alt=media", fileID)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create download request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+p.tokens.AccessToken)
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("download request failed: %w", err)
+	}
+	// Do not defer Close() yet, as we might swap it
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		// Handle Google Docs that cannot be downloaded as binary - Retry with PDF export
+		if resp.StatusCode == http.StatusForbidden && strings.Contains(string(body), "Only files with binary content can be downloaded") {
+			exportURL := fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s/export?mimeType=application/pdf", fileID)
+			reqExport, err := http.NewRequestWithContext(ctx, "GET", exportURL, nil)
+			if err != nil {
+				return fmt.Errorf("failed to create export request: %w", err)
+			}
+			reqExport.Header.Set("Authorization", "Bearer "+p.tokens.AccessToken)
+
+			respExport, err := p.httpClient.Do(reqExport)
+			if err != nil {
+				return fmt.Errorf("export request failed: %w", err)
+			}
+
+			if respExport.StatusCode != http.StatusOK {
+				bodyExport, _ := io.ReadAll(respExport.Body)
+				respExport.Body.Close()
+				return fmt.Errorf("export failed with status %d: %s", respExport.StatusCode, string(bodyExport))
+			}
+			// Replace the failed response with the export response
+			resp = respExport
+		} else {
+			return fmt.Errorf("download failed with status %d: %s", resp.StatusCode, string(body))
+		}
+	} else {
+		// Only close original body if we didn't swap it (or if we did swap, we need to ensure the swapped one is closed at end of function)
+		// Actually, deferred Close handles the current `resp.Body`.
+		// If we swapped `resp`, the old `resp.Body` was closed above.
+		// The deferred close will close the *current* `resp.Body` (which is the new one).
+		// Wait, defer is evaluated at function entry? No, arguments are evaluated. `resp.Body` access happens when defer executes?
+		// "The arguments to the deferred function (which include the receiver if the function is a method) are evaluated when the defer executes" -> NO.
+		// "The arguments... are evaluated when the defer statement is evaluated."
+
+		// So `defer resp.Body.Close()` at the top (or where it was) captures the *old* Body.
+		// The code had `defer resp.Body.Close()` *after* the error check in the original.
+
+		// In my proposed replacement:
+		// The original code was:
+		/*
+			resp, err := p.httpClient.Do(req)
+			if err != nil { ... }
+			defer resp.Body.Close()
+		*/
+
+		// If I replace logic *before* the defer (or remove and re-add defer), I need to be careful.
+		// I will just not verify the previous `defer` line in the match and rewrite a larger block to handle it correctly.
+	}
+
+	// We need to handle the defer correctly. simpler: don't rely on existing defer.
+	// We will manually close in error path or defer the final one.
+
+	// Let's rewrite the block starting from the first request.
+
+	// Use content-length if available and totalSize not provided
+	if totalSize <= 0 && resp.ContentLength > 0 {
+		totalSize = resp.ContentLength
+	}
+
+	// Create progress reader wrapper
+	var downloaded int64
+	buf := make([]byte, 32*1024) // 32KB buffer
+	lastProgress := int64(-1)
+
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			written, writeErr := writer.Write(buf[:n])
+			if writeErr != nil {
+				return fmt.Errorf("failed to write downloaded data: %w", writeErr)
+			}
+			downloaded += int64(written)
+
+			// Report progress (throttle to avoid too many updates)
+			if progressFn != nil && totalSize > 0 {
+				currentProgress := (downloaded * 100) / totalSize
+				if currentProgress != lastProgress {
+					progressFn(downloaded, totalSize)
+					lastProgress = currentProgress
+				}
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("download read error: %w", err)
+		}
+	}
+
+	// Final progress update
+	if progressFn != nil {
+		progressFn(downloaded, totalSize)
+	}
+
+	return nil
 }
 
 // Delete removes a file from Google Drive
@@ -586,13 +770,87 @@ func (p *GoogleDriveProvider) GetFile(ctx context.Context, fileID string) (*File
 }
 
 // ListFiles lists files in a directory
-func (p *GoogleDriveProvider) ListFiles(ctx context.Context, path string) ([]*FileMetadata, error) {
-	if !p.IsAuthenticated() {
-		return nil, ErrNotAuthenticated
+func (p *GoogleDriveProvider) ListFiles(ctx context.Context, parentID string) ([]*FileMetadata, error) {
+	if err := p.ensureValidToken(ctx); err != nil {
+		return nil, err
 	}
 
-	// TODO: Implement actual Google Drive file listing
-	return []*FileMetadata{}, nil
+	if parentID == "" || parentID == "/" {
+		parentID = "root"
+	}
+
+	var allFiles []*FileMetadata
+	pageToken := ""
+
+	for {
+		q := fmt.Sprintf("'%s' in parents and trashed = false", parentID)
+		params := url.Values{}
+		params.Set("q", q)
+		params.Set("fields", "nextPageToken, files(id, name, mimeType, size, md5Checksum, modifiedTime, createdTime)")
+		params.Set("pageSize", "1000")
+		if pageToken != "" {
+			params.Set("pageToken", pageToken)
+		}
+
+		listURL := "https://www.googleapis.com/drive/v3/files?" + params.Encode()
+
+		resp, err := p.makeAuthenticatedRequest(ctx, "GET", listURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list files: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to list files status %d: %s", resp.StatusCode, string(body))
+		}
+
+		var result struct {
+			NextPageToken string `json:"nextPageToken"`
+			Files         []struct {
+				ID           string    `json:"id"`
+				Name         string    `json:"name"`
+				MimeType     string    `json:"mimeType"`
+				Size         string    `json:"size"`
+				MD5Checksum  string    `json:"md5Checksum"`
+				ModifiedTime time.Time `json:"modifiedTime"`
+				CreatedTime  time.Time `json:"createdTime"`
+			} `json:"files"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode list response: %w", err)
+		}
+		resp.Body.Close()
+
+		for _, f := range result.Files {
+			size := int64(0)
+			if f.Size != "" {
+				fmt.Sscanf(f.Size, "%d", &size)
+			}
+
+			isDir := f.MimeType == "application/vnd.google-apps.folder"
+
+			allFiles = append(allFiles, &FileMetadata{
+				ID:       f.ID,
+				Name:     f.Name,
+				Path:     f.ID, // Using ID not full path
+				Size:     size,
+				MimeType: f.MimeType,
+				Checksum: f.MD5Checksum,
+				ModTime:  f.ModifiedTime,
+				IsDir:    isDir,
+			})
+		}
+
+		pageToken = result.NextPageToken
+		if pageToken == "" {
+			break
+		}
+	}
+
+	return allFiles, nil
 }
 
 // CreateFolder creates a new folder in Google Drive

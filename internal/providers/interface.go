@@ -99,7 +99,7 @@ type CloudProvider interface {
 	GetFile(ctx context.Context, fileID string) (*FileMetadata, error)
 
 	// ListFiles lists files in a directory
-	ListFiles(ctx context.Context, path string) ([]*FileMetadata, error)
+	ListFiles(ctx context.Context, parentID string) ([]*FileMetadata, error)
 
 	// CreateFolder creates a new folder
 	CreateFolder(ctx context.Context, path string) (*FileMetadata, error)

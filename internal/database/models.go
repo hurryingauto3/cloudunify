@@ -83,6 +83,7 @@ type File struct {
 	Checksum    string     `json:"checksum,omitempty"`
 	MimeType    string     `json:"mime_type,omitempty"`
 	Status      FileStatus `json:"status"`
+	Pinned      bool       `json:"pinned"`
 	IsDir       bool       `json:"is_dir"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`

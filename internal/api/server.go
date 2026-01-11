@@ -78,6 +78,8 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/files", s.handlers.HandleListFiles).Methods("GET")
 	api.HandleFunc("/files/search", s.handlers.HandleSearchFiles).Methods("POST")
 	api.HandleFunc("/files/upload", s.handlers.HandleUploadFile).Methods("POST")
+	api.HandleFunc("/files/{id:[0-9]+}/pin", s.handlers.HandlePinFile).Methods("POST")
+	api.HandleFunc("/files/{id:[0-9]+}/unpin", s.handlers.HandleUnpinFile).Methods("POST")
 	api.HandleFunc("/files/{path:.*}", s.handlers.HandleGetFile).Methods("GET")
 	api.HandleFunc("/files/{path:.*}", s.handlers.HandleDeleteFile).Methods("DELETE")
 

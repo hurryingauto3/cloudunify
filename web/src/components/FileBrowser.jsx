@@ -29,7 +29,14 @@ import FolderZipIcon from '@mui/icons-material/FolderZip';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import { getFiles, deleteFile } from '../services/api';
+import PushPinIcon from '@mui/icons-material/PushPin';
+import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
+import CloudIcon from '@mui/icons-material/Cloud';
+import CloudDoneIcon from '@mui/icons-material/CloudDone';
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import { getFiles, deleteFile, pinFile, unpinFile } from '../services/api';
 
 function formatBytes(bytes) {
   if (bytes === 0) return '0 B';
@@ -99,6 +106,41 @@ function FileBrowser() {
       setFiles((prev) => prev.filter((f) => f.id !== file.id));
     } catch (err) {
       console.error('Failed to delete file:', err);
+    }
+  };
+
+  const handlePin = async (file) => {
+    try {
+      await pinFile(file.id);
+      setFiles((prev) => prev.map((f) => (f.id === file.id ? { ...f, pinned: true } : f)));
+    } catch (err) {
+      console.error('Failed to pin file:', err);
+    }
+  };
+
+  const handleUnpin = async (file) => {
+    try {
+      await unpinFile(file.id);
+      setFiles((prev) => prev.map((f) => (f.id === file.id ? { ...f, pinned: false } : f)));
+    } catch (err) {
+      console.error('Failed to unpin file:', err);
+    }
+  };
+
+  const getStatusIcon = (status) => {
+    switch (status) {
+      case 'synced':
+        return <CloudDoneIcon fontSize="small" color="success" />;
+      case 'uploading':
+        return <CloudUploadIcon fontSize="small" color="info" />;
+      case 'downloading':
+        return <CloudDownloadIcon fontSize="small" color="info" />;
+      case 'pending':
+        return <CloudIcon fontSize="small" color="disabled" />;
+      case 'error':
+        return <ErrorOutlineIcon fontSize="small" color="error" />;
+      default:
+        return <CloudIcon fontSize="small" color="disabled" />;
     }
   };
 
@@ -194,6 +236,8 @@ function FileBrowser() {
               <TableHead>
                 <TableRow>
                   <TableCell>Name</TableCell>
+                  <TableCell align="center">Status</TableCell>
+                  <TableCell align="center">Pinned</TableCell>
                   <TableCell>Size</TableCell>
                   <TableCell>Modified</TableCell>
                   <TableCell align="right">Actions</TableCell>
@@ -214,6 +258,41 @@ function FileBrowser() {
                           {file.virtual_path.split('/').pop()}
                         </Typography>
                       </Box>
+                    </TableCell>
+                    <TableCell align="center">
+                      <Tooltip title={file.status || 'unknown'}>
+                        <Box component="span" sx={{ display: 'inline-flex', verticalAlign: 'middle' }}>
+                          {getStatusIcon(file.status)}
+                        </Box>
+                      </Tooltip>
+                    </TableCell>
+                    <TableCell align="center">
+                      {file.pinned ? (
+                        <Tooltip title="Unpin">
+                          <IconButton
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleUnpin(file);
+                            }}
+                            color="primary"
+                          >
+                            <PushPinIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      ) : (
+                        <Tooltip title="Pin (Keep Offline)">
+                          <IconButton
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handlePin(file);
+                            }}
+                          >
+                            <PushPinOutlinedIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Typography variant="body2" color="text.secondary">

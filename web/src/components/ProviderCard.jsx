@@ -73,11 +73,13 @@ function ProviderCard({ provider, onRemove, onRefresh }) {
                     </Box>
                     <Box sx={{ flex: 1 }}>
                         <Typography variant="subtitle1" fontWeight={600}>
-                            {provider.name}
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary">
                             {providerNames[provider.type] || provider.type}
                         </Typography>
+                        {provider.name && provider.name !== provider.type && (
+                            <Typography variant="caption" color="text.secondary">
+                                {provider.name}
+                            </Typography>
+                        )}
                     </Box>
                     <Chip
                         label={provider.enabled ? 'Connected' : 'Disconnected'}
@@ -112,16 +114,18 @@ function ProviderCard({ provider, onRemove, onRefresh }) {
                     >
                         Refresh
                     </Button>
-                    <Button
-                        size="small"
-                        variant="outlined"
-                        color="error"
-                        startIcon={<DeleteOutlineIcon />}
-                        onClick={handleRemove}
-                        disabled={isRemoving}
-                    >
-                        {isRemoving ? 'Removing...' : 'Remove'}
-                    </Button>
+                    {onRemove && (
+                        <Button
+                            size="small"
+                            variant="outlined"
+                            color="error"
+                            startIcon={<DeleteOutlineIcon />}
+                            onClick={handleRemove}
+                            disabled={isRemoving}
+                        >
+                            {isRemoving ? 'Removing...' : 'Remove'}
+                        </Button>
+                    )}
                 </Stack>
             </CardContent>
         </Card>

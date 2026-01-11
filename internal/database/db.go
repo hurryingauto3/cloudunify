@@ -147,12 +147,46 @@ func (db *DB) UpdateProvider(ctx context.Context, p *Provider) error {
 }
 
 // DeleteProvider removes a provider
+// DeleteProvider removes a provider and all its associated data
 func (db *DB) DeleteProvider(ctx context.Context, id int64) error {
-	_, err := db.ExecContext(ctx, "DELETE FROM providers WHERE id=?", id)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete from sync_queue first (foreign keys)
+	_, err = tx.ExecContext(ctx, "DELETE FROM sync_queue WHERE provider_id=?", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete sync queue items: %w", err)
+	}
+
+	// We also need to clear cache for these files?
+	// The cache table references files(id).
+	// If we delete files, cache might have issues if cascading isn't on.
+	// But let's delete files, dependent cache entries will be orphaned if FK not set to cascade.
+	// Migration showed: FOREIGN KEY (file_id) REFERENCES files(id)
+	// Let's manually clean cache to be safe.
+	// "DELETE FROM cache WHERE file_id IN (SELECT id FROM files WHERE provider_id=?)"
+
+	_, err = tx.ExecContext(ctx, "DELETE FROM cache WHERE file_id IN (SELECT id FROM files WHERE provider_id=?)", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete cache items: %w", err)
+	}
+
+	// Delete from files
+	_, err = tx.ExecContext(ctx, "DELETE FROM files WHERE provider_id=?", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete files: %w", err)
+	}
+
+	// Delete provider
+	_, err = tx.ExecContext(ctx, "DELETE FROM providers WHERE id=?", id)
 	if err != nil {
 		return fmt.Errorf("failed to delete provider: %w", err)
 	}
-	return nil
+
+	return tx.Commit()
 }
 
 // UpdateProviderUsage updates the used_bytes for a provider
@@ -171,9 +205,9 @@ func (db *DB) UpdateProviderUsage(ctx context.Context, id int64, usedBytes int64
 // CreateFile inserts a new file
 func (db *DB) CreateFile(ctx context.Context, f *File) error {
 	result, err := db.ExecContext(ctx, `
-		INSERT INTO files (virtual_path, provider_id, cloud_file_id, cloud_path, size_bytes, checksum, mime_type, status, is_dir)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, f.VirtualPath, f.ProviderID, f.CloudFileID, f.CloudPath, f.SizeBytes, f.Checksum, f.MimeType, f.Status, f.IsDir)
+		INSERT INTO files (virtual_path, provider_id, cloud_file_id, cloud_path, size_bytes, checksum, mime_type, status, pinned, is_dir)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, f.VirtualPath, f.ProviderID, f.CloudFileID, f.CloudPath, f.SizeBytes, f.Checksum, f.MimeType, f.Status, f.Pinned, f.IsDir)
 	if err != nil {
 		return fmt.Errorf("failed to insert file: %w", err)
 	}
@@ -190,9 +224,9 @@ func (db *DB) CreateFile(ctx context.Context, f *File) error {
 func (db *DB) GetFile(ctx context.Context, id int64) (*File, error) {
 	var f File
 	err := db.QueryRowContext(ctx, `
-		SELECT id, virtual_path, provider_id, cloud_file_id, cloud_path, size_bytes, checksum, mime_type, status, is_dir, created_at, updated_at
+		SELECT id, virtual_path, provider_id, cloud_file_id, cloud_path, size_bytes, checksum, mime_type, status, pinned, is_dir, created_at, updated_at
 		FROM files WHERE id = ?
-	`, id).Scan(&f.ID, &f.VirtualPath, &f.ProviderID, &f.CloudFileID, &f.CloudPath, &f.SizeBytes, &f.Checksum, &f.MimeType, &f.Status, &f.IsDir, &f.CreatedAt, &f.UpdatedAt)
+	`, id).Scan(&f.ID, &f.VirtualPath, &f.ProviderID, &f.CloudFileID, &f.CloudPath, &f.SizeBytes, &f.Checksum, &f.MimeType, &f.Status, &f.Pinned, &f.IsDir, &f.CreatedAt, &f.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -206,9 +240,9 @@ func (db *DB) GetFile(ctx context.Context, id int64) (*File, error) {
 func (db *DB) GetFileByPath(ctx context.Context, virtualPath string) (*File, error) {
 	var f File
 	err := db.QueryRowContext(ctx, `
-		SELECT id, virtual_path, provider_id, cloud_file_id, cloud_path, size_bytes, checksum, mime_type, status, is_dir, created_at, updated_at
+		SELECT id, virtual_path, provider_id, cloud_file_id, cloud_path, size_bytes, checksum, mime_type, status, pinned, is_dir, created_at, updated_at
 		FROM files WHERE virtual_path = ?
-	`, virtualPath).Scan(&f.ID, &f.VirtualPath, &f.ProviderID, &f.CloudFileID, &f.CloudPath, &f.SizeBytes, &f.Checksum, &f.MimeType, &f.Status, &f.IsDir, &f.CreatedAt, &f.UpdatedAt)
+	`, virtualPath).Scan(&f.ID, &f.VirtualPath, &f.ProviderID, &f.CloudFileID, &f.CloudPath, &f.SizeBytes, &f.Checksum, &f.MimeType, &f.Status, &f.Pinned, &f.IsDir, &f.CreatedAt, &f.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -232,7 +266,7 @@ func (db *DB) ListFilesInDirectory(ctx context.Context, dirPath string) ([]*File
 	}
 
 	rows, err := db.QueryContext(ctx, `
-		SELECT id, virtual_path, provider_id, cloud_file_id, cloud_path, size_bytes, checksum, mime_type, status, is_dir, created_at, updated_at
+		SELECT id, virtual_path, provider_id, cloud_file_id, cloud_path, size_bytes, checksum, mime_type, status, pinned, is_dir, created_at, updated_at
 		FROM files
 		WHERE virtual_path LIKE ? || '%'
 		AND virtual_path != ?
@@ -247,7 +281,7 @@ func (db *DB) ListFilesInDirectory(ctx context.Context, dirPath string) ([]*File
 	var files []*File
 	for rows.Next() {
 		var f File
-		if err := rows.Scan(&f.ID, &f.VirtualPath, &f.ProviderID, &f.CloudFileID, &f.CloudPath, &f.SizeBytes, &f.Checksum, &f.MimeType, &f.Status, &f.IsDir, &f.CreatedAt, &f.UpdatedAt); err != nil {
+		if err := rows.Scan(&f.ID, &f.VirtualPath, &f.ProviderID, &f.CloudFileID, &f.CloudPath, &f.SizeBytes, &f.Checksum, &f.MimeType, &f.Status, &f.Pinned, &f.IsDir, &f.CreatedAt, &f.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan file: %w", err)
 		}
 		files = append(files, &f)
@@ -258,9 +292,9 @@ func (db *DB) ListFilesInDirectory(ctx context.Context, dirPath string) ([]*File
 // UpdateFile updates a file
 func (db *DB) UpdateFile(ctx context.Context, f *File) error {
 	_, err := db.ExecContext(ctx, `
-		UPDATE files SET provider_id=?, cloud_file_id=?, cloud_path=?, size_bytes=?, checksum=?, mime_type=?, status=?, is_dir=?, updated_at=CURRENT_TIMESTAMP
+		UPDATE files SET provider_id=?, cloud_file_id=?, cloud_path=?, size_bytes=?, checksum=?, mime_type=?, status=?, pinned=?, is_dir=?, updated_at=CURRENT_TIMESTAMP
 		WHERE id=?
-	`, f.ProviderID, f.CloudFileID, f.CloudPath, f.SizeBytes, f.Checksum, f.MimeType, f.Status, f.IsDir, f.ID)
+	`, f.ProviderID, f.CloudFileID, f.CloudPath, f.SizeBytes, f.Checksum, f.MimeType, f.Status, f.Pinned, f.IsDir, f.ID)
 	if err != nil {
 		return fmt.Errorf("failed to update file: %w", err)
 	}
@@ -274,6 +308,17 @@ func (db *DB) UpdateFileStatus(ctx context.Context, id int64, status FileStatus)
 	`, status, id)
 	if err != nil {
 		return fmt.Errorf("failed to update file status: %w", err)
+	}
+	return nil
+}
+
+// UpdateFilePinned updates only the pinned state of a file
+func (db *DB) UpdateFilePinned(ctx context.Context, id int64, pinned bool) error {
+	_, err := db.ExecContext(ctx, `
+		UPDATE files SET pinned=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
+	`, pinned, id)
+	if err != nil {
+		return fmt.Errorf("failed to update file pinned state: %w", err)
 	}
 	return nil
 }
