@@ -23,6 +23,9 @@ function StorageDashboard({ providers, onRemoveProvider, onRefreshProvider }) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
+    // Check if iCloud is among providers (has estimated quota)
+    const hasICloud = providers.some(p => p.type === 'icloud');
+
     useEffect(() => {
         fetchStats();
     }, [providers]);
@@ -86,6 +89,11 @@ function StorageDashboard({ providers, onRemoveProvider, onRefreshProvider }) {
                             <strong>{formatBytes(stats?.free_bytes || 0)}</strong> available
                         </Typography>
                     </Box>
+                    {hasICloud && (
+                        <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                            * iCloud quota is estimated. Actual quota managed by Apple.
+                        </Typography>
+                    )}
                 </CardContent>
             </Card>
 

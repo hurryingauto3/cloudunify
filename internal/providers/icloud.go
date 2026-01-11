@@ -2,18 +2,29 @@ package providers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 )
 
-// ICloudProvider implements CloudProvider for iCloud via WebDAV
+// iCloudProvider implements CloudProvider for iCloud via local folder access
+// On macOS/Windows, this reads/writes directly to the iCloud Drive folder,
+// and the OS handles the sync to Apple's servers.
+//
+// Platform paths:
+//   - macOS: ~/Library/Mobile Documents/com~apple~CloudDocs
+//   - Windows: %USERPROFILE%\iCloudDrive (requires iCloud for Windows)
 type ICloudProvider struct {
-	name        string
-	config      *AuthConfig
-	tokens      *TokenInfo
-	username    string
-	appPassword string // App-specific password for iCloud
+	name     string
+	config   *AuthConfig
+	tokens   *TokenInfo
+	basePath string // Resolved path to iCloud folder
 }
 
 // NewICloudProvider creates a new iCloud provider
@@ -34,35 +45,102 @@ func (p *ICloudProvider) Name() string {
 	return p.name
 }
 
-// GetAuthURL returns the OAuth authorization URL
-// Note: iCloud uses app-specific passwords, not OAuth
-func (p *ICloudProvider) GetAuthURL(state string) string {
-	// iCloud doesn't use OAuth - direct users to create app-specific password
-	return "https://appleid.apple.com/account/manage"
+// getDefaultICloudPath returns the platform-specific iCloud Drive folder path
+func getDefaultICloudPath() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "~/Library/Mobile Documents/com~apple~CloudDocs"
+	case "windows":
+		// iCloud for Windows default location
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		return filepath.Join(home, "iCloudDrive")
+	default:
+		// Linux - no official iCloud support
+		return ""
+	}
 }
 
-// ExchangeCode exchanges an authorization code for tokens
-// Note: iCloud uses app-specific passwords, so this validates the credentials
+// expandPath expands ~ to home directory
+func expandPath(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return filepath.Join(home, path[2:])
+	}
+	return path
+}
+
+// GetAuthURL returns instructions for iCloud setup
+func (p *ICloudProvider) GetAuthURL(state string) string {
+	// For local folder approach, we just need to verify the folder exists
+	// Return a special URL that the frontend will handle
+	return fmt.Sprintf("cloudunify://icloud-local?state=%s", state)
+}
+
+// ExchangeCode validates that iCloud Drive folder exists and is accessible
 func (p *ICloudProvider) ExchangeCode(ctx context.Context, code string) (*TokenInfo, error) {
-	// For iCloud, the "code" is actually the app-specific password
-	// We store it as the access token for consistency
+	// Get platform-specific default path
+	basePath := getDefaultICloudPath()
+	if basePath == "" {
+		return nil, fmt.Errorf("iCloud Drive is not supported on %s. Only macOS and Windows (with iCloud for Windows) are supported", runtime.GOOS)
+	}
+	basePath = expandPath(basePath)
+
+	// Check if custom path was provided
+	if code != "" && code != "local" {
+		basePath = expandPath(code)
+	}
+
+	// Verify the folder exists
+	info, err := os.Stat(basePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if runtime.GOOS == "darwin" {
+				return nil, fmt.Errorf("iCloud Drive folder not found at %s. Make sure iCloud Drive is enabled in System Preferences > Apple ID > iCloud", basePath)
+			} else if runtime.GOOS == "windows" {
+				return nil, fmt.Errorf("iCloud Drive folder not found at %s. Make sure iCloud for Windows is installed and iCloud Drive is enabled", basePath)
+			}
+			return nil, fmt.Errorf("iCloud Drive folder not found at %s", basePath)
+		}
+		return nil, fmt.Errorf("cannot access iCloud Drive folder: %w", err)
+	}
+
+	if !info.IsDir() {
+		return nil, fmt.Errorf("iCloud Drive path is not a directory: %s", basePath)
+	}
+
+	// Test write access
+	testFile := filepath.Join(basePath, ".cloudunify_test")
+	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
+		return nil, fmt.Errorf("no write access to iCloud Drive folder: %w", err)
+	}
+	os.Remove(testFile)
+
+	p.basePath = basePath
+
+	// Return a token with the base path stored
 	return &TokenInfo{
-		AccessToken:  code,
-		RefreshToken: "", // Not used for WebDAV
-		TokenType:    "Basic",
-		Expiry:       time.Now().Add(365 * 24 * time.Hour), // App passwords don't expire
+		AccessToken:  basePath, // Store the path as the "token"
+		RefreshToken: "",
+		TokenType:    "local",
+		Expiry:       time.Now().Add(100 * 365 * 24 * time.Hour), // Never expires
 	}, nil
 }
 
 // SetTokens sets the authentication credentials
 func (p *ICloudProvider) SetTokens(tokens *TokenInfo) {
 	p.tokens = tokens
-	if tokens != nil {
-		p.appPassword = tokens.AccessToken
+	if tokens != nil && tokens.AccessToken != "" {
+		p.basePath = tokens.AccessToken
 	}
 }
 
-// RefreshToken for iCloud is a no-op since app passwords don't expire
+// RefreshToken for iCloud local is a no-op
 func (p *ICloudProvider) RefreshToken(ctx context.Context) (*TokenInfo, error) {
 	if p.tokens == nil {
 		return nil, ErrNotAuthenticated
@@ -70,26 +148,59 @@ func (p *ICloudProvider) RefreshToken(ctx context.Context) (*TokenInfo, error) {
 	return p.tokens, nil
 }
 
-// IsAuthenticated returns whether the provider has valid credentials
+// IsAuthenticated returns whether the provider is configured
 func (p *ICloudProvider) IsAuthenticated() bool {
-	return p.tokens != nil && p.tokens.AccessToken != ""
+	if p.tokens == nil || p.basePath == "" {
+		return false
+	}
+	// Verify folder still exists
+	_, err := os.Stat(p.basePath)
+	return err == nil
 }
 
-// Upload uploads a file from a local path to iCloud via WebDAV
+// resolvePath converts a virtual path to the actual filesystem path
+func (p *ICloudProvider) resolvePath(virtualPath string) string {
+	virtualPath = strings.TrimPrefix(virtualPath, "/")
+	// Treat "root" as empty (base path), also handle "root/..." paths
+	if virtualPath == "root" {
+		virtualPath = ""
+	} else if strings.HasPrefix(virtualPath, "root/") {
+		virtualPath = strings.TrimPrefix(virtualPath, "root/")
+	}
+	return filepath.Join(p.basePath, virtualPath)
+}
+
+// generateFileID creates a stable ID from the file path
+func (p *ICloudProvider) generateFileID(path string) string {
+	hash := sha256.Sum256([]byte(path))
+	return "icloud_" + hex.EncodeToString(hash[:8])
+}
+
+// pathFromID extracts the path from our ID format (for local files, ID IS the path)
+func (p *ICloudProvider) pathFromID(fileID string) string {
+	// For local provider, the fileID is the relative path
+	// We store the relative path directly as the ID in the database
+	return fileID
+}
+
+// Upload uploads a file from a local path to iCloud
 func (p *ICloudProvider) Upload(ctx context.Context, localPath string, remotePath string) (*FileMetadata, error) {
 	if !p.IsAuthenticated() {
 		return nil, ErrNotAuthenticated
 	}
 
-	// TODO: Implement WebDAV PUT request to iCloud
-	return &FileMetadata{
-		ID:       fmt.Sprintf("icloud_%d", time.Now().UnixNano()),
-		Name:     remotePath,
-		Path:     remotePath,
-		Size:     0,
-		MimeType: "application/octet-stream",
-		ModTime:  time.Now(),
-	}, nil
+	srcFile, err := os.Open(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open source file: %w", err)
+	}
+	defer srcFile.Close()
+
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat source file: %w", err)
+	}
+
+	return p.UploadStream(ctx, srcFile, remotePath, srcInfo.Size())
 }
 
 // UploadStream uploads data from a reader to iCloud
@@ -98,14 +209,42 @@ func (p *ICloudProvider) UploadStream(ctx context.Context, reader io.Reader, rem
 		return nil, ErrNotAuthenticated
 	}
 
-	// TODO: Implement WebDAV streaming upload
+	destPath := p.resolvePath(remotePath)
+
+	// Ensure parent directory exists
+	parentDir := filepath.Dir(destPath)
+	if err := os.MkdirAll(parentDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create parent directory: %w", err)
+	}
+
+	// Create destination file
+	destFile, err := os.Create(destPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create destination file: %w", err)
+	}
+	defer destFile.Close()
+
+	// Copy content
+	written, err := io.Copy(destFile, reader)
+	if err != nil {
+		os.Remove(destPath)
+		return nil, fmt.Errorf("failed to write file: %w", err)
+	}
+
+	// Get file info for metadata
+	info, err := os.Stat(destPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat new file: %w", err)
+	}
+
 	return &FileMetadata{
-		ID:       fmt.Sprintf("icloud_%d", time.Now().UnixNano()),
-		Name:     remotePath,
+		ID:       strings.TrimPrefix(remotePath, "/"),
+		Name:     filepath.Base(remotePath),
 		Path:     remotePath,
-		Size:     size,
-		MimeType: "application/octet-stream",
-		ModTime:  time.Now(),
+		Size:     written,
+		MimeType: detectMimeType(filepath.Base(remotePath)),
+		ModTime:  info.ModTime(),
+		IsDir:    false,
 	}, nil
 }
 
@@ -115,8 +254,14 @@ func (p *ICloudProvider) Download(ctx context.Context, fileID string, writer io.
 		return ErrNotAuthenticated
 	}
 
-	// TODO: Implement WebDAV GET request
-	return nil
+	stream, err := p.DownloadStream(ctx, fileID)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+
+	_, err = io.Copy(writer, stream)
+	return err
 }
 
 // DownloadStream returns a reader for streaming download
@@ -125,18 +270,52 @@ func (p *ICloudProvider) DownloadStream(ctx context.Context, fileID string) (io.
 		return nil, ErrNotAuthenticated
 	}
 
-	// TODO: Implement WebDAV streaming download
-	return nil, fmt.Errorf("not implemented")
+	filePath := p.resolvePath(fileID)
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+
+	return file, nil
 }
 
-// SupportsRangeRequests returns false - iCloud not yet implemented
+// SupportsRangeRequests returns true - local files support range reads
 func (p *ICloudProvider) SupportsRangeRequests() bool {
-	return false
+	return true
 }
 
-// DownloadRange is not implemented for iCloud yet
+// DownloadRange downloads a byte range from a file
 func (p *ICloudProvider) DownloadRange(ctx context.Context, fileID string, start, end int64) (io.ReadCloser, error) {
-	return nil, ErrRangeNotSupported
+	if !p.IsAuthenticated() {
+		return nil, ErrNotAuthenticated
+	}
+
+	filePath := p.resolvePath(fileID)
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+
+	// Seek to start position
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("failed to seek: %w", err)
+	}
+
+	// Return a limited reader that only reads the requested range
+	length := end - start + 1
+	return &limitedReadCloser{
+		Reader: io.LimitReader(file, length),
+		Closer: file,
+	}, nil
+}
+
+// limitedReadCloser wraps a LimitReader with a Closer
+type limitedReadCloser struct {
+	io.Reader
+	io.Closer
 }
 
 // Delete removes a file from iCloud
@@ -145,8 +324,21 @@ func (p *ICloudProvider) Delete(ctx context.Context, fileID string) error {
 		return ErrNotAuthenticated
 	}
 
-	// TODO: Implement WebDAV DELETE request
-	return nil
+	filePath := p.resolvePath(fileID)
+
+	// Check if it exists
+	info, err := os.Stat(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // Already deleted
+		}
+		return fmt.Errorf("failed to stat file: %w", err)
+	}
+
+	if info.IsDir() {
+		return os.RemoveAll(filePath)
+	}
+	return os.Remove(filePath)
 }
 
 // GetFile retrieves metadata for a specific file
@@ -155,11 +347,21 @@ func (p *ICloudProvider) GetFile(ctx context.Context, fileID string) (*FileMetad
 		return nil, ErrNotAuthenticated
 	}
 
-	// TODO: Implement WebDAV PROPFIND request
+	filePath := p.resolvePath(fileID)
+
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat file: %w", err)
+	}
+
 	return &FileMetadata{
-		ID:      fileID,
-		Name:    "mock_file",
-		ModTime: time.Now(),
+		ID:       fileID,
+		Name:     info.Name(),
+		Path:     fileID,
+		Size:     info.Size(),
+		MimeType: detectMimeType(info.Name()),
+		ModTime:  info.ModTime(),
+		IsDir:    info.IsDir(),
 	}, nil
 }
 
@@ -169,8 +371,48 @@ func (p *ICloudProvider) ListFiles(ctx context.Context, path string) ([]*FileMet
 		return nil, ErrNotAuthenticated
 	}
 
-	// TODO: Implement WebDAV PROPFIND with depth=1
-	return []*FileMetadata{}, nil
+	dirPath := p.resolvePath(path)
+
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory: %w", err)
+	}
+
+	var files []*FileMetadata
+	for _, entry := range entries {
+		// Skip hidden files and system files
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		relativePath := path
+		// Treat "root" as base path for ID generation
+		if relativePath == "" || relativePath == "/" || relativePath == "." || relativePath == "root" {
+			relativePath = entry.Name()
+		} else {
+			// Strip "root/" prefix if present
+			cleanPath := strings.TrimPrefix(path, "/")
+			cleanPath = strings.TrimPrefix(cleanPath, "root/")
+			relativePath = filepath.Join(cleanPath, entry.Name())
+		}
+
+		files = append(files, &FileMetadata{
+			ID:       relativePath,
+			Name:     entry.Name(),
+			Path:     relativePath,
+			Size:     info.Size(),
+			MimeType: detectMimeType(entry.Name()),
+			ModTime:  info.ModTime(),
+			IsDir:    entry.IsDir(),
+		})
+	}
+
+	return files, nil
 }
 
 // CreateFolder creates a new folder in iCloud
@@ -179,27 +421,73 @@ func (p *ICloudProvider) CreateFolder(ctx context.Context, path string) (*FileMe
 		return nil, ErrNotAuthenticated
 	}
 
-	// TODO: Implement WebDAV MKCOL request
+	folderPath := p.resolvePath(path)
+
+	if err := os.MkdirAll(folderPath, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create folder: %w", err)
+	}
+
+	info, err := os.Stat(folderPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat folder: %w", err)
+	}
+
 	return &FileMetadata{
-		ID:      fmt.Sprintf("icloud_folder_%d", time.Now().UnixNano()),
-		Name:    path,
+		ID:      strings.TrimPrefix(path, "/"),
+		Name:    filepath.Base(path),
 		Path:    path,
 		IsDir:   true,
-		ModTime: time.Now(),
+		ModTime: info.ModTime(),
 	}, nil
 }
 
 // GetQuota returns the storage quota information
+// For local folder approach, we check disk space and estimate iCloud usage
 func (p *ICloudProvider) GetQuota(ctx context.Context) (*QuotaInfo, error) {
 	if !p.IsAuthenticated() {
 		return nil, ErrNotAuthenticated
 	}
 
-	// TODO: Implement quota check via WebDAV or iCloud API
-	// Default to 5GB free tier for mock
+	// Calculate used space in iCloud folder
+	var usedBytes int64
+	err := filepath.Walk(p.basePath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip errors
+		}
+		if !info.IsDir() {
+			usedBytes += info.Size()
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate usage: %w", err)
+	}
+
+	// Try to get disk space (platform-specific)
+	// Default to 5GB if we can't determine
+	totalBytes := int64(5 * 1024 * 1024 * 1024) // 5GB default
+	freeBytes := int64(5*1024*1024*1024) - usedBytes
+
+	// On macOS/Unix, we could use syscall to get actual disk space
+	// but for simplicity, we'll use the iCloud plan size from config
+	// Users typically have 5GB (free), 50GB, 200GB, or 2TB plans
+	if runtime.GOOS == "darwin" {
+		// Try to estimate based on iCloud plan (default 5GB)
+		// In a production app, you'd query the iCloud API for actual quota
+		// For now, assume user's plan based on usage
+		if usedBytes > 200*1024*1024*1024 {
+			totalBytes = 2 * 1024 * 1024 * 1024 * 1024 // 2TB
+		} else if usedBytes > 50*1024*1024*1024 {
+			totalBytes = 200 * 1024 * 1024 * 1024 // 200GB
+		} else if usedBytes > 5*1024*1024*1024 {
+			totalBytes = 50 * 1024 * 1024 * 1024 // 50GB
+		}
+		freeBytes = totalBytes - usedBytes
+	}
+
 	return &QuotaInfo{
-		TotalBytes: 5 * 1024 * 1024 * 1024, // 5 GB
-		UsedBytes:  0,
-		FreeBytes:  5 * 1024 * 1024 * 1024,
+		TotalBytes: totalBytes,
+		UsedBytes:  usedBytes,
+		FreeBytes:  freeBytes,
 	}, nil
 }

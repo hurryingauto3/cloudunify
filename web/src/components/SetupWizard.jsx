@@ -19,7 +19,20 @@ import CloudIcon from '@mui/icons-material/Cloud';
 import AppleIcon from '@mui/icons-material/Apple';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import { addProvider, getOAuthStatus, getProviders } from '../services/api';
+import { addProvider, getOAuthStatus, getProviders, verifyICloud } from '../services/api';
+
+// Detect platform for iCloud description
+const isMac = navigator.platform?.toLowerCase().includes('mac');
+const isWindows = navigator.platform?.toLowerCase().includes('win');
+
+const getICloudDescription = () => {
+  if (isMac) {
+    return 'Uses your local iCloud Drive folder (macOS syncs to cloud)';
+  } else if (isWindows) {
+    return 'Uses iCloud for Windows folder (requires iCloud app)';
+  }
+  return 'Uses local iCloud Drive folder (macOS/Windows only)';
+};
 
 const providerOptions = [
   {
@@ -28,6 +41,7 @@ const providerOptions = [
     icon: <GoogleIcon />,
     description: 'Connect your Google Drive account',
     quota: '15 GB free',
+    requiresOAuth: true,
   },
   {
     type: 'onedrive',
@@ -35,13 +49,17 @@ const providerOptions = [
     icon: <CloudIcon />,
     description: 'Connect your Microsoft OneDrive account',
     quota: '5 GB free',
+    requiresOAuth: true,
   },
   {
     type: 'icloud',
-    name: 'iCloud',
+    name: 'iCloud Drive',
     icon: <AppleIcon />,
-    description: 'Connect your Apple iCloud account',
-    quota: '5 GB free',
+    description: getICloudDescription(),
+    quota: 'Your plan',
+    requiresOAuth: false,
+    localFolder: true,
+    platformNote: isMac || isWindows ? null : 'Not supported on this platform',
   },
 ];
 
@@ -128,14 +146,40 @@ function SetupWizard({ onComplete }) {
     setError(null);
 
     try {
-      if (!oauthStatus[type]?.configured) {
+      // iCloud is always configured (uses local folder)
+      if (type !== 'icloud' && !oauthStatus[type]?.configured) {
         setError(`OAuth not configured for ${type}. Please set environment variables.`);
         setConnecting(false);
         return;
       }
 
       const response = await addProvider(type);
-      const { provider, auth_url, message } = response.data;
+      const { provider, auth_url, local } = response.data;
+
+      // Handle iCloud local folder flow
+      if (type === 'icloud' && local) {
+        try {
+          // Verify the local iCloud folder
+          await verifyICloud(provider.id);
+          setConnectedProviders((prev) => [...new Set([...prev, type])]);
+          setConnecting(false);
+          return;
+        } catch (verifyErr) {
+          const errorMessage = verifyErr.response?.data?.error?.message || verifyErr.message;
+
+          // Platform-specific error guidance
+          let guidance = '';
+          if (isMac) {
+            guidance = '\n\nTo fix this:\n1. Open System Settings → Apple ID → iCloud\n2. Enable "iCloud Drive"\n3. Wait for the folder to appear and try again';
+          } else if (isWindows) {
+            guidance = '\n\nTo fix this:\n1. Install iCloud for Windows from the Microsoft Store\n2. Sign in and enable iCloud Drive\n3. Wait for sync to complete and try again';
+          }
+
+          setError(`iCloud setup failed: ${errorMessage}${guidance}`);
+          setConnecting(false);
+          return;
+        }
+      }
 
       if (auth_url) {
         setPendingProvider(provider.id);
@@ -191,6 +235,8 @@ function SetupWizard({ onComplete }) {
   };
 
   const isProviderConfigured = (type) => {
+    // iCloud uses local folder, no OAuth needed
+    if (type === 'icloud') return true;
     return oauthStatus[type]?.configured !== false;
   };
 
@@ -240,22 +286,25 @@ function SetupWizard({ onComplete }) {
                   const isConnected = connectedProviders.includes(provider.type);
                   const isSelected = selectedProviders.includes(provider.type);
 
+                  const isUnsupported = provider.platformNote;
+                  const canSelect = !isConnected && isConfigured && !isUnsupported;
+
                   return (
                     <Box
                       key={provider.type}
-                      onClick={() => !isConnected && isConfigured && toggleProvider(provider.type)}
+                      onClick={() => canSelect && toggleProvider(provider.type)}
                       sx={{
                         p: 2,
                         border: 2,
                         borderColor: isConnected ? 'success.main' : isSelected ? 'primary.main' : 'grey.200',
                         borderRadius: 2,
-                        cursor: isConnected || !isConfigured ? 'default' : 'pointer',
-                        opacity: !isConfigured ? 0.5 : 1,
+                        cursor: canSelect ? 'pointer' : 'default',
+                        opacity: !isConfigured || isUnsupported ? 0.5 : 1,
                         display: 'flex',
                         alignItems: 'center',
                         gap: 2,
                         transition: 'all 0.2s',
-                        '&:hover': isConfigured && !isConnected ? { borderColor: 'primary.main' } : {},
+                        '&:hover': canSelect ? { borderColor: 'primary.main' } : {},
                       }}
                     >
                       <Box sx={{ color: 'primary.main' }}>{provider.icon}</Box>
@@ -264,13 +313,21 @@ function SetupWizard({ onComplete }) {
                         <Typography variant="body2" color="text.secondary">
                           {provider.description}
                         </Typography>
-                        <Chip label={provider.quota} size="small" sx={{ mt: 1 }} />
-                        {!isConfigured && (
-                          <Chip label="OAuth not configured" size="small" color="warning" sx={{ mt: 1, ml: 1 }} />
-                        )}
-                        {isConnected && (
-                          <Chip label="Already connected" size="small" color="success" sx={{ mt: 1, ml: 1 }} />
-                        )}
+                        <Box sx={{ mt: 1, display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                          <Chip label={provider.quota} size="small" />
+                          {provider.localFolder && (
+                            <Chip label="Local folder" size="small" color="info" variant="outlined" />
+                          )}
+                          {isUnsupported && (
+                            <Chip label={provider.platformNote} size="small" color="error" />
+                          )}
+                          {!isConfigured && provider.requiresOAuth && (
+                            <Chip label="OAuth not configured" size="small" color="warning" />
+                          )}
+                          {isConnected && (
+                            <Chip label="Already connected" size="small" color="success" />
+                          )}
+                        </Box>
                       </Box>
                       {(isConnected || isSelected) && (
                         <CheckCircleIcon color={isConnected ? 'success' : 'primary'} />

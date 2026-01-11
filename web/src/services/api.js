@@ -16,6 +16,7 @@ export const addProvider = (type, name = '') => api.post('/providers', { type, n
 export const deleteProvider = (id) => api.delete(`/providers/${id}`);
 export const getProviderQuota = (id) => api.get(`/providers/${id}/quota`);
 export const refreshProviderToken = (id) => api.post(`/providers/${id}/refresh`);
+export const verifyICloud = (id, customPath = '') => api.post(`/providers/${id}/verify-icloud`, { custom_path: customPath });
 
 // OAuth endpoints
 export const getOAuthStatus = () => api.get('/auth/status');

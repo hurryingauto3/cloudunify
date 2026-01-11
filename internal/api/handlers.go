@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -185,6 +186,35 @@ func (h *Handlers) HandleCreateProvider(w http.ResponseWriter, r *http.Request) 
 	}
 	if !validTypes[req.Type] {
 		respondError(w, http.StatusBadRequest, "INVALID_TYPE", "Invalid provider type")
+		return
+	}
+
+	// For iCloud, we use local folder approach - no OAuth needed
+	if req.Type == "icloud" {
+		// Create provider in database
+		provider := &database.Provider{
+			Name:    req.Name,
+			Type:    database.ProviderType(req.Type),
+			Enabled: false,
+		}
+
+		if err := h.db.CreateProvider(r.Context(), provider); err != nil {
+			respondError(w, http.StatusInternalServerError, "DB_ERROR", "Failed to create provider")
+			return
+		}
+
+		// Return with special auth_url for iCloud local setup
+		respondJSON(w, http.StatusCreated, struct {
+			Provider *database.Provider `json:"provider"`
+			AuthURL  string             `json:"auth_url"`
+			State    string             `json:"state"`
+			Local    bool               `json:"local"`
+		}{
+			Provider: provider,
+			AuthURL:  fmt.Sprintf("cloudunify://icloud-local?provider_id=%d", provider.ID),
+			State:    fmt.Sprintf("icloud_%d", provider.ID),
+			Local:    true,
+		})
 		return
 	}
 
@@ -449,6 +479,79 @@ func (h *Handlers) HandleRefreshToken(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"success":      true,
 		"token_expiry": tokens.Expiry,
+	})
+}
+
+// HandleVerifyICloud verifies and completes iCloud local folder setup
+func (h *Handlers) HandleVerifyICloud(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, err := strconv.ParseInt(vars["id"], 10, 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "INVALID_ID", "Invalid provider ID")
+		return
+	}
+
+	var req struct {
+		CustomPath string `json:"custom_path,omitempty"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	// Get the provider from database
+	dbProvider, err := h.db.GetProvider(r.Context(), id)
+	if err != nil || dbProvider == nil {
+		respondError(w, http.StatusNotFound, "NOT_FOUND", "Provider not found")
+		return
+	}
+
+	if dbProvider.Type != database.ProviderICloud {
+		respondError(w, http.StatusBadRequest, "INVALID_TYPE", "Provider is not iCloud")
+		return
+	}
+
+	// Create iCloud provider and verify local folder
+	config := h.providerManager.GetConfig("icloud")
+	icloudProvider := providers.NewICloudProvider(dbProvider.Name, config)
+
+	// ExchangeCode verifies the local folder exists and is writable
+	code := "local"
+	if req.CustomPath != "" {
+		code = req.CustomPath
+	}
+
+	tokens, err := icloudProvider.ExchangeCode(r.Context(), code)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "VERIFICATION_FAILED", err.Error())
+		return
+	}
+
+	// Set tokens on provider
+	icloudProvider.SetTokens(tokens)
+
+	// Update provider in database
+	dbProvider.AccessToken = tokens.AccessToken // This contains the base path
+	dbProvider.TokenExpiry = &tokens.Expiry
+	dbProvider.Enabled = true
+
+	if err := h.db.UpdateProvider(r.Context(), dbProvider); err != nil {
+		respondError(w, http.StatusInternalServerError, "DB_ERROR", "Failed to update provider")
+		return
+	}
+
+	// Register provider
+	h.providerManager.RegisterProvider(dbProvider.ID, icloudProvider)
+	h.syncEngine.RegisterProvider(dbProvider.ID, icloudProvider)
+
+	// Get quota
+	if quota, err := icloudProvider.GetQuota(r.Context()); err == nil {
+		dbProvider.QuotaBytes = quota.TotalBytes
+		dbProvider.UsedBytes = quota.UsedBytes
+		h.db.UpdateProvider(r.Context(), dbProvider)
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success":  true,
+		"provider": dbProvider,
+		"message":  fmt.Sprintf("iCloud connected via local folder: %s", tokens.AccessToken),
 	})
 }
 

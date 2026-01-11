@@ -69,6 +69,7 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/providers/{id}", s.handlers.HandleDeleteProvider).Methods("DELETE")
 	api.HandleFunc("/providers/{id}/quota", s.handlers.HandleGetProviderQuota).Methods("GET")
 	api.HandleFunc("/providers/{id}/refresh", s.handlers.HandleRefreshToken).Methods("POST")
+	api.HandleFunc("/providers/{id}/verify-icloud", s.handlers.HandleVerifyICloud).Methods("POST")
 
 	// Storage information
 	api.HandleFunc("/storage", s.handlers.HandleGetStorage).Methods("GET")

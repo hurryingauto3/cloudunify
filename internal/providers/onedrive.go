@@ -15,11 +15,49 @@ import (
 )
 
 const (
-	msGraphBaseURL   = "https://graph.microsoft.com/v1.0"
-	msAuthURL        = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
-	msTokenURL       = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+	msGraphBaseURL          = "https://graph.microsoft.com/v1.0"
+	msAuthURL               = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+	msTokenURL              = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 	oneDriveUploadChunkSize = 10 * 1024 * 1024 // 10MB chunks for resumable upload
 )
+
+// isOneDriveItemID checks if a string looks like a OneDrive item ID
+// OneDrive item IDs are typically alphanumeric strings like "01BX5TBLL56Y2GOVW74L..."
+// Paths contain slashes or common extensions, IDs don't
+func isOneDriveItemID(s string) bool {
+	if s == "" {
+		return false
+	}
+	// OneDrive IDs don't contain path separators or dots (except at very end which is rare)
+	if strings.Contains(s, "/") || strings.Contains(s, "\\") {
+		return false
+	}
+	// IDs are typically long (>10 chars) and alphanumeric with possible special chars
+	// A path like "Desktop" is short and looks like a folder name
+	// An ID like "01BX5TBLL56Y2GOVW74L" is long and has mixed case
+	if len(s) < 10 {
+		return false
+	}
+	// Check if it looks like a OneDrive ID (alphanumeric, no common file extensions)
+	commonExtensions := []string{".txt", ".pdf", ".doc", ".xlsx", ".jpg", ".png", ".mp4"}
+	for _, ext := range commonExtensions {
+		if strings.HasSuffix(strings.ToLower(s), ext) {
+			return false
+		}
+	}
+	// IDs typically start with numbers or uppercase and contain mix of upper/lower/numbers
+	hasUpper := false
+	hasNumber := false
+	for _, c := range s {
+		if c >= 'A' && c <= 'Z' {
+			hasUpper = true
+		}
+		if c >= '0' && c <= '9' {
+			hasNumber = true
+		}
+	}
+	return hasUpper && hasNumber && len(s) >= 15
+}
 
 // OneDriveProvider implements CloudProvider for Microsoft OneDrive
 type OneDriveProvider struct {
@@ -536,18 +574,23 @@ func (p *OneDriveProvider) GetFile(ctx context.Context, fileID string) (*FileMet
 }
 
 // ListFiles lists files in a directory
-func (p *OneDriveProvider) ListFiles(ctx context.Context, path string) ([]*FileMetadata, error) {
+func (p *OneDriveProvider) ListFiles(ctx context.Context, pathOrID string) ([]*FileMetadata, error) {
 	if err := p.ensureValidToken(ctx); err != nil {
 		return nil, err
 	}
 
 	var listURL string
-	path = strings.Trim(path, "/")
+	pathOrID = strings.Trim(pathOrID, "/")
 
-	if path == "" || path == "." {
+	// Treat empty, ".", or "root" as the root folder
+	if pathOrID == "" || pathOrID == "." || pathOrID == "root" {
 		listURL = fmt.Sprintf("%s/me/drive/root/children?$top=200", msGraphBaseURL)
+	} else if isOneDriveItemID(pathOrID) {
+		// It's an item ID (like "01ABCDEFGHIJK..."), use ID-based lookup
+		listURL = fmt.Sprintf("%s/me/drive/items/%s/children?$top=200", msGraphBaseURL, pathOrID)
 	} else {
-		encodedPath := url.PathEscape(path)
+		// It's a path, use path-based lookup
+		encodedPath := url.PathEscape(pathOrID)
 		listURL = fmt.Sprintf("%s/me/drive/root:/%s:/children?$top=200", msGraphBaseURL, encodedPath)
 	}
 

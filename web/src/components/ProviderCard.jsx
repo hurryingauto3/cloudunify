@@ -38,6 +38,8 @@ function formatBytes(bytes) {
 function ProviderCard({ provider, onRemove, onRefresh }) {
     const [isRemoving, setIsRemoving] = useState(false);
 
+    // iCloud uses local folder, quota is estimated/managed by Apple
+    const isICloud = provider.type === 'icloud';
     const usagePercent = provider.quota_bytes > 0
         ? (provider.used_bytes / provider.quota_bytes) * 100
         : 0;
@@ -54,8 +56,8 @@ function ProviderCard({ provider, onRemove, onRefresh }) {
     };
 
     return (
-        <Card>
-            <CardContent>
+        <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                 <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, mb: 2 }}>
                     <Box
                         sx={{
@@ -71,13 +73,17 @@ function ProviderCard({ provider, onRemove, onRefresh }) {
                     >
                         {providerIcons[provider.type] || <CloudIcon />}
                     </Box>
-                    <Box sx={{ flex: 1 }}>
+                    <Box sx={{ flex: 1, minHeight: 48 }}>
                         <Typography variant="subtitle1" fontWeight={600}>
                             {providerNames[provider.type] || provider.type}
                         </Typography>
-                        {provider.name && provider.name !== provider.type && (
-                            <Typography variant="caption" color="text.secondary">
-                                {provider.name}
+                        {isICloud ? (
+                            <Typography variant="caption" color="text.secondary" display="block">
+                                Local folder (synced by {navigator.platform?.includes('Mac') ? 'macOS' : 'iCloud for Windows'})
+                            </Typography>
+                        ) : (
+                            <Typography variant="caption" color="text.secondary" display="block">
+                                &nbsp;
                             </Typography>
                         )}
                     </Box>
@@ -89,23 +95,51 @@ function ProviderCard({ provider, onRemove, onRefresh }) {
                     />
                 </Box>
 
-                <Box sx={{ mb: 2 }}>
-                    <LinearProgress
-                        variant="determinate"
-                        value={Math.min(usagePercent, 100)}
-                        sx={{ height: 8, borderRadius: 1, mb: 1 }}
-                    />
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Typography variant="caption" color="text.secondary">
-                            {formatBytes(provider.used_bytes)} used
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                            {formatBytes(provider.quota_bytes - provider.used_bytes)} free
-                        </Typography>
-                    </Box>
+                <Box sx={{ mb: 2, flex: 1 }}>
+                    {isICloud ? (
+                        // iCloud shows folder usage, not true quota
+                        <>
+                            <Box sx={{
+                                p: 1.5,
+                                bgcolor: 'grey.100',
+                                borderRadius: 1,
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                mb: 1
+                            }}>
+                                <Typography variant="body2" color="text.secondary">
+                                    Folder usage
+                                </Typography>
+                                <Typography variant="body2" fontWeight={500}>
+                                    {formatBytes(provider.used_bytes)}
+                                </Typography>
+                            </Box>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                                Quota managed by iCloud. Check Apple Settings for storage details.
+                            </Typography>
+                        </>
+                    ) : (
+                        // Google Drive / OneDrive show real quota
+                        <>
+                            <LinearProgress
+                                variant="determinate"
+                                value={Math.min(usagePercent, 100)}
+                                sx={{ height: 8, borderRadius: 1, mb: 1 }}
+                            />
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                                <Typography variant="caption" color="text.secondary">
+                                    {formatBytes(provider.used_bytes)} used
+                                </Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                    {formatBytes(provider.quota_bytes - provider.used_bytes)} free
+                                </Typography>
+                            </Box>
+                        </>
+                    )}
                 </Box>
 
-                <Stack direction="row" spacing={1}>
+                <Stack direction="row" spacing={1} sx={{ mt: 'auto' }}>
                     <Button
                         size="small"
                         variant="outlined"
