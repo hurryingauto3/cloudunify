@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Box,
   Card,
@@ -16,6 +16,13 @@ import {
   IconButton,
   Tooltip,
   Stack,
+  TextField,
+  InputAdornment,
+  Chip,
+  Menu,
+  MenuItem,
+  ListItemIcon,
+  ListItemText,
 } from '@mui/material';
 import HomeIcon from '@mui/icons-material/Home';
 import FolderIcon from '@mui/icons-material/Folder';
@@ -36,7 +43,10 @@ import CloudDoneIcon from '@mui/icons-material/CloudDone';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
-import { getFiles, deleteFile, pinFile, unpinFile } from '../services/api';
+import SearchIcon from '@mui/icons-material/Search';
+import ClearIcon from '@mui/icons-material/Clear';
+import CloudOffIcon from '@mui/icons-material/CloudOff';
+import { getFiles, deleteFile, pinFile, unpinFile, searchFiles, dehydrateFile } from '../services/api';
 
 function formatBytes(bytes) {
   if (bytes === 0) return '0 B';
@@ -61,10 +71,42 @@ function FileBrowser() {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState(null);
+  const [isSearching, setIsSearching] = useState(false);
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState(null);
+  const [contextFile, setContextFile] = useState(null);
 
   useEffect(() => {
-    fetchFiles(currentPath);
-  }, [currentPath]);
+    if (!searchResults) {
+      fetchFiles(currentPath);
+    }
+  }, [currentPath, searchResults]);
+
+  // Debounced search effect
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults(null);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const response = await searchFiles(searchQuery, 50);
+        setSearchResults(response.data || []);
+      } catch (err) {
+        console.error('Search failed:', err);
+        setSearchResults([]);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 300); // 300ms debounce
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   const fetchFiles = async (path) => {
     try {
@@ -81,6 +123,8 @@ function FileBrowser() {
   };
 
   const navigateTo = (path) => {
+    setSearchQuery('');
+    setSearchResults(null);
     setCurrentPath(path);
   };
 
@@ -98,12 +142,15 @@ function FileBrowser() {
   };
 
   const handleDelete = async (file, e) => {
-    e.stopPropagation();
+    if (e) e.stopPropagation();
     if (!window.confirm(`Delete ${file.virtual_path}?`)) return;
 
     try {
       await deleteFile(file.virtual_path);
       setFiles((prev) => prev.filter((f) => f.id !== file.id));
+      if (searchResults) {
+        setSearchResults((prev) => prev.filter((f) => f.id !== file.id));
+      }
     } catch (err) {
       console.error('Failed to delete file:', err);
     }
@@ -112,7 +159,9 @@ function FileBrowser() {
   const handlePin = async (file) => {
     try {
       await pinFile(file.id);
-      setFiles((prev) => prev.map((f) => (f.id === file.id ? { ...f, pinned: true } : f)));
+      const updateFiles = (prev) => prev.map((f) => (f.id === file.id ? { ...f, pinned: true } : f));
+      setFiles(updateFiles);
+      if (searchResults) setSearchResults(updateFiles);
     } catch (err) {
       console.error('Failed to pin file:', err);
     }
@@ -121,10 +170,45 @@ function FileBrowser() {
   const handleUnpin = async (file) => {
     try {
       await unpinFile(file.id);
-      setFiles((prev) => prev.map((f) => (f.id === file.id ? { ...f, pinned: false } : f)));
+      const updateFiles = (prev) => prev.map((f) => (f.id === file.id ? { ...f, pinned: false } : f));
+      setFiles(updateFiles);
+      if (searchResults) setSearchResults(updateFiles);
     } catch (err) {
       console.error('Failed to unpin file:', err);
     }
+  };
+
+  const handleDehydrate = async (file) => {
+    try {
+      const response = await dehydrateFile(file.id);
+      if (response.data.status === 'dehydrated') {
+        const freedBytes = formatBytes(response.data.freed_bytes || 0);
+        console.log(`Dehydrated ${file.virtual_path}, freed ${freedBytes}`);
+      }
+    } catch (err) {
+      console.error('Failed to dehydrate file:', err);
+      if (err.response?.data?.code === 'file_pinned') {
+        alert('Cannot dehydrate pinned file. Unpin first.');
+      }
+    }
+  };
+
+  // Context menu handlers
+  const handleContextMenu = useCallback((event, file) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({ mouseX: event.clientX, mouseY: event.clientY });
+    setContextFile(file);
+  }, []);
+
+  const handleCloseContextMenu = () => {
+    setContextMenu(null);
+    setContextFile(null);
+  };
+
+  const clearSearch = () => {
+    setSearchQuery('');
+    setSearchResults(null);
   };
 
   const getStatusIcon = (status) => {
@@ -172,35 +256,72 @@ function FileBrowser() {
   };
 
   const breadcrumbs = currentPath.split('/').filter(Boolean);
+  const displayFiles = searchResults !== null ? searchResults : files;
 
   return (
     <Card>
       <CardContent>
+        {/* Search Bar */}
         <Box sx={{ mb: 2 }}>
-          <Breadcrumbs>
-            <Link
-              component="button"
-              variant="body2"
-              underline="hover"
-              onClick={() => navigateTo('/')}
-              sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}
-            >
-              <HomeIcon fontSize="small" />
-              Home
-            </Link>
-            {breadcrumbs.map((part, index) => (
+          <TextField
+            fullWidth
+            size="small"
+            placeholder="Search files..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon color="action" />
+                </InputAdornment>
+              ),
+              endAdornment: searchQuery && (
+                <InputAdornment position="end">
+                  <IconButton size="small" onClick={clearSearch}>
+                    <ClearIcon fontSize="small" />
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
+          />
+          {searchResults !== null && (
+            <Chip
+              label={`${searchResults.length} result${searchResults.length !== 1 ? 's' : ''}`}
+              size="small"
+              onDelete={clearSearch}
+              sx={{ mt: 1 }}
+            />
+          )}
+        </Box>
+
+        {/* Breadcrumbs - hide during search */}
+        {!searchResults && (
+          <Box sx={{ mb: 2 }}>
+            <Breadcrumbs>
               <Link
-                key={index}
                 component="button"
                 variant="body2"
                 underline="hover"
-                onClick={() => navigateTo('/' + breadcrumbs.slice(0, index + 1).join('/'))}
+                onClick={() => navigateTo('/')}
+                sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}
               >
-                {part}
+                <HomeIcon fontSize="small" />
+                Home
               </Link>
-            ))}
-          </Breadcrumbs>
-        </Box>
+              {breadcrumbs.map((part, index) => (
+                <Link
+                  key={index}
+                  component="button"
+                  variant="body2"
+                  underline="hover"
+                  onClick={() => navigateTo('/' + breadcrumbs.slice(0, index + 1).join('/'))}
+                >
+                  {part}
+                </Link>
+              ))}
+            </Breadcrumbs>
+          </Box>
+        )}
 
         <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
           <Button
@@ -208,7 +329,7 @@ function FileBrowser() {
             variant="outlined"
             startIcon={<ArrowUpwardIcon />}
             onClick={navigateUp}
-            disabled={currentPath === '/'}
+            disabled={currentPath === '/' || searchResults !== null}
           >
             Up
           </Button>
@@ -216,19 +337,27 @@ function FileBrowser() {
             size="small"
             variant="outlined"
             startIcon={<RefreshIcon />}
-            onClick={() => fetchFiles(currentPath)}
+            onClick={() => {
+              if (searchResults) {
+                setSearchQuery(searchQuery); // Retrigger search
+              } else {
+                fetchFiles(currentPath);
+              }
+            }}
           >
             Refresh
           </Button>
         </Stack>
 
-        {loading ? (
-          <Typography color="text.secondary">Loading files...</Typography>
+        {loading || isSearching ? (
+          <Typography color="text.secondary">{isSearching ? 'Searching...' : 'Loading files...'}</Typography>
         ) : error ? (
           <Typography color="error">{error}</Typography>
-        ) : files.length === 0 ? (
+        ) : displayFiles.length === 0 ? (
           <Box sx={{ textAlign: 'center', py: 4 }}>
-            <Typography color="text.secondary">This folder is empty</Typography>
+            <Typography color="text.secondary">
+              {searchResults !== null ? 'No files match your search' : 'This folder is empty'}
+            </Typography>
           </Box>
         ) : (
           <TableContainer>
@@ -244,12 +373,13 @@ function FileBrowser() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {files.map((file) => (
+                {displayFiles.map((file) => (
                   <TableRow
                     key={file.id}
                     hover
                     sx={{ cursor: file.is_dir ? 'pointer' : 'default' }}
                     onClick={() => handleFileClick(file)}
+                    onContextMenu={(e) => handleContextMenu(e, file)}
                   >
                     <TableCell>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -305,11 +435,26 @@ function FileBrowser() {
                       </Typography>
                     </TableCell>
                     <TableCell align="right">
-                      <Tooltip title="Delete">
-                        <IconButton size="small" onClick={(e) => handleDelete(file, e)}>
-                          <DeleteOutlineIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                      <Stack direction="row" spacing={0} justifyContent="flex-end">
+                        {!file.is_dir && !file.pinned && (
+                          <Tooltip title="Dehydrate (Remove local copy)">
+                            <IconButton
+                              size="small"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDehydrate(file);
+                              }}
+                            >
+                              <CloudOffIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                        <Tooltip title="Delete">
+                          <IconButton size="small" onClick={(e) => handleDelete(file, e)}>
+                            <DeleteOutlineIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Stack>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -317,6 +462,49 @@ function FileBrowser() {
             </Table>
           </TableContainer>
         )}
+
+        {/* Context Menu */}
+        <Menu
+          open={contextMenu !== null}
+          onClose={handleCloseContextMenu}
+          anchorReference="anchorPosition"
+          anchorPosition={
+            contextMenu !== null
+              ? { top: contextMenu.mouseY, left: contextMenu.mouseX }
+              : undefined
+          }
+        >
+          {contextFile && !contextFile.pinned && (
+            <MenuItem onClick={() => { handlePin(contextFile); handleCloseContextMenu(); }}>
+              <ListItemIcon>
+                <PushPinIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>Pin (Keep Offline)</ListItemText>
+            </MenuItem>
+          )}
+          {contextFile && contextFile.pinned && (
+            <MenuItem onClick={() => { handleUnpin(contextFile); handleCloseContextMenu(); }}>
+              <ListItemIcon>
+                <PushPinOutlinedIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>Unpin</ListItemText>
+            </MenuItem>
+          )}
+          {contextFile && !contextFile.is_dir && !contextFile.pinned && (
+            <MenuItem onClick={() => { handleDehydrate(contextFile); handleCloseContextMenu(); }}>
+              <ListItemIcon>
+                <CloudOffIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>Dehydrate (Remove local copy)</ListItemText>
+            </MenuItem>
+          )}
+          <MenuItem onClick={() => { if (contextFile) handleDelete(contextFile); handleCloseContextMenu(); }}>
+            <ListItemIcon>
+              <DeleteOutlineIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Delete</ListItemText>
+          </MenuItem>
+        </Menu>
       </CardContent>
     </Card>
   );

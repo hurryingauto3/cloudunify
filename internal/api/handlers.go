@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -545,6 +546,7 @@ func (h *Handlers) HandleDeleteFile(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) HandleSearchFiles(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Query string `json:"query"`
+		Limit int    `json:"limit"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -552,9 +554,23 @@ func (h *Handlers) HandleSearchFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For now, just return empty results
-	// TODO: Implement actual search
-	respondJSON(w, http.StatusOK, []interface{}{})
+	if req.Query == "" {
+		respondError(w, http.StatusBadRequest, "EMPTY_QUERY", "Search query is required")
+		return
+	}
+
+	if req.Limit <= 0 {
+		req.Limit = 50
+	}
+
+	files, err := h.db.SearchFiles(r.Context(), req.Query, req.Limit)
+	if err != nil {
+		log.Printf("Search error: %v", err)
+		respondError(w, http.StatusInternalServerError, "DB_ERROR", "Failed to search files")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, files)
 }
 
 // HandleUploadFile handles file uploads
@@ -858,7 +874,7 @@ func (h *Handlers) HandleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandlePinFile pins a file to cache
+// HandlePinFile pins a file to cache and triggers download if not cached
 func (h *Handlers) HandlePinFile(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id, err := strconv.ParseInt(vars["id"], 10, 64)
@@ -867,12 +883,45 @@ func (h *Handlers) HandlePinFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get file info
+	file, err := h.db.GetFile(r.Context(), id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "db_error", "Failed to get file")
+		return
+	}
+	if file == nil {
+		respondError(w, http.StatusNotFound, "not_found", "File not found")
+		return
+	}
+
+	// Update pinned status
 	if err := h.db.UpdateFilePinned(r.Context(), id, true); err != nil {
 		respondError(w, http.StatusInternalServerError, "db_error", "Failed to pin file")
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]string{"status": "pinned"})
+	// Check if file is already cached
+	isCached, _, err := h.db.GetFileCachedStatus(r.Context(), id)
+	if err != nil {
+		log.Printf("Warning: failed to check cache status: %v", err)
+	}
+
+	// If not cached, queue a download
+	downloading := false
+	if !isCached && file.CloudFileID != "" {
+		_, err := h.syncEngine.EnqueueDownload(r.Context(), file.VirtualPath, "", 5) // High priority, empty localPath means use cache
+		if err != nil {
+			log.Printf("Warning: failed to queue download for pinned file: %v", err)
+		} else {
+			downloading = true
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":      "pinned",
+		"is_cached":   isCached,
+		"downloading": downloading,
+	})
 }
 
 // HandleUnpinFile unpins a file from cache
@@ -890,4 +939,62 @@ func (h *Handlers) HandleUnpinFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "unpinned"})
+}
+
+// HandleDehydrateFile removes a file from local cache (keeps cloud copy)
+func (h *Handlers) HandleDehydrateFile(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, err := strconv.ParseInt(vars["id"], 10, 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid_id", "Invalid file ID")
+		return
+	}
+
+	// Get file info
+	file, err := h.db.GetFile(r.Context(), id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "db_error", "Failed to get file")
+		return
+	}
+	if file == nil {
+		respondError(w, http.StatusNotFound, "not_found", "File not found")
+		return
+	}
+
+	// Don't allow dehydrating pinned files
+	if file.Pinned {
+		respondError(w, http.StatusBadRequest, "file_pinned", "Cannot dehydrate pinned file. Unpin first.")
+		return
+	}
+
+	// Get and remove cache entry
+	cacheEntry, err := h.db.GetCacheEntry(r.Context(), id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "db_error", "Failed to check cache")
+		return
+	}
+
+	if cacheEntry == nil {
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":  "already_dehydrated",
+			"message": "File is not in local cache",
+		})
+		return
+	}
+
+	// Delete local cache file
+	if err := os.Remove(cacheEntry.LocalPath); err != nil && !os.IsNotExist(err) {
+		log.Printf("Warning: failed to delete cache file: %v", err)
+	}
+
+	// Delete cache entry from database
+	if err := h.db.DeleteCacheEntry(r.Context(), cacheEntry.ID); err != nil {
+		respondError(w, http.StatusInternalServerError, "db_error", "Failed to remove cache entry")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":      "dehydrated",
+		"freed_bytes": cacheEntry.SizeBytes,
+	})
 }

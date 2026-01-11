@@ -220,6 +220,35 @@ func (db *DB) CreateFile(ctx context.Context, f *File) error {
 	return nil
 }
 
+// CreateOrUpdateFile inserts a new file or updates if virtual_path already exists
+func (db *DB) CreateOrUpdateFile(ctx context.Context, f *File) error {
+	result, err := db.ExecContext(ctx, `
+		INSERT INTO files (virtual_path, provider_id, cloud_file_id, cloud_path, size_bytes, checksum, mime_type, status, pinned, is_dir)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(virtual_path) DO UPDATE SET
+			cloud_file_id = excluded.cloud_file_id,
+			cloud_path = excluded.cloud_path,
+			size_bytes = excluded.size_bytes,
+			checksum = excluded.checksum,
+			mime_type = excluded.mime_type,
+			status = excluded.status,
+			is_dir = excluded.is_dir,
+			updated_at = CURRENT_TIMESTAMP
+	`, f.VirtualPath, f.ProviderID, f.CloudFileID, f.CloudPath, f.SizeBytes, f.Checksum, f.MimeType, f.Status, f.Pinned, f.IsDir)
+	if err != nil {
+		return fmt.Errorf("failed to upsert file: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("failed to get last insert id: %w", err)
+	}
+	if id > 0 {
+		f.ID = id
+	}
+	return nil
+}
+
 // GetFile retrieves a file by ID
 func (db *DB) GetFile(ctx context.Context, id int64) (*File, error) {
 	var f File
@@ -635,6 +664,82 @@ func (db *DB) GetLRUCacheEntries(ctx context.Context, limit int) ([]*CacheEntry,
 		entries = append(entries, &c)
 	}
 	return entries, nil
+}
+
+// GetLRUCacheEntriesUnpinned returns cache entries for unpinned files, ordered by last accessed (oldest first)
+func (db *DB) GetLRUCacheEntriesUnpinned(ctx context.Context, limit int) ([]*CacheEntry, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT c.id, c.file_id, c.local_path, c.size_bytes, c.last_accessed
+		FROM cache c
+		JOIN files f ON f.id = c.file_id
+		WHERE f.pinned = 0
+		ORDER BY c.last_accessed ASC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LRU unpinned cache entries: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []*CacheEntry
+	for rows.Next() {
+		var c CacheEntry
+		if err := rows.Scan(&c.ID, &c.FileID, &c.LocalPath, &c.SizeBytes, &c.LastAccessed); err != nil {
+			return nil, fmt.Errorf("failed to scan cache entry: %w", err)
+		}
+		entries = append(entries, &c)
+	}
+	return entries, nil
+}
+
+// GetFileCachedStatus returns whether a file is cached and its cache path
+func (db *DB) GetFileCachedStatus(ctx context.Context, fileID int64) (bool, string, error) {
+	var localPath string
+	err := db.QueryRowContext(ctx, `
+		SELECT local_path FROM cache WHERE file_id = ?
+	`, fileID).Scan(&localPath)
+	if err == sql.ErrNoRows {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", fmt.Errorf("failed to get file cached status: %w", err)
+	}
+	return true, localPath, nil
+}
+
+// SearchFiles searches for files by name or path
+func (db *DB) SearchFiles(ctx context.Context, query string, limit int) ([]*File, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	// Use LIKE for simple substring matching
+	searchPattern := "%" + query + "%"
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, virtual_path, provider_id, cloud_file_id, cloud_path, size_bytes, checksum, mime_type, status, pinned, is_dir, created_at, updated_at
+		FROM files
+		WHERE virtual_path LIKE ?
+		ORDER BY 
+			CASE WHEN virtual_path LIKE ? THEN 0 ELSE 1 END,
+			is_dir DESC,
+			virtual_path ASC
+		LIMIT ?
+	`, searchPattern, "%/"+query+"%", limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search files: %w", err)
+	}
+	defer rows.Close()
+
+	var files []*File
+	for rows.Next() {
+		var f File
+		if err := rows.Scan(&f.ID, &f.VirtualPath, &f.ProviderID, &f.CloudFileID, &f.CloudPath, &f.SizeBytes, &f.Checksum, &f.MimeType, &f.Status, &f.Pinned, &f.IsDir, &f.CreatedAt, &f.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan file: %w", err)
+		}
+		files = append(files, &f)
+	}
+	return files, nil
 }
 
 // Storage summary

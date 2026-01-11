@@ -545,6 +545,42 @@ func (p *GoogleDriveProvider) Download(ctx context.Context, fileID string, write
 	return err
 }
 
+// SupportsRangeRequests returns true - Google Drive supports byte range requests
+func (p *GoogleDriveProvider) SupportsRangeRequests() bool {
+	return true
+}
+
+// DownloadRange downloads a byte range of a file using HTTP Range header
+func (p *GoogleDriveProvider) DownloadRange(ctx context.Context, fileID string, start, end int64) (io.ReadCloser, error) {
+	if err := p.ensureValidToken(ctx); err != nil {
+		return nil, err
+	}
+
+	downloadURL := fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s?alt=media", fileID)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create range download request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+p.tokens.AccessToken)
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("range download request failed: %w", err)
+	}
+
+	// HTTP 206 Partial Content is the success code for range requests
+	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("range download failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return resp.Body, nil
+}
+
 // DownloadStream returns a reader for streaming download
 func (p *GoogleDriveProvider) DownloadStream(ctx context.Context, fileID string) (io.ReadCloser, error) {
 	if err := p.ensureValidToken(ctx); err != nil {

@@ -134,6 +134,16 @@ func (p *OneDriveProvider) DownloadStream(ctx context.Context, fileID string) (i
 	return nil, fmt.Errorf("not implemented")
 }
 
+// SupportsRangeRequests returns false - OneDrive not yet implemented
+func (p *OneDriveProvider) SupportsRangeRequests() bool {
+	return false
+}
+
+// DownloadRange is not implemented for OneDrive yet
+func (p *OneDriveProvider) DownloadRange(ctx context.Context, fileID string, start, end int64) (io.ReadCloser, error) {
+	return nil, ErrRangeNotSupported
+}
+
 // Delete removes a file from OneDrive
 func (p *OneDriveProvider) Delete(ctx context.Context, fileID string) error {
 	if !p.IsAuthenticated() {

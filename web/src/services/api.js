@@ -32,9 +32,10 @@ export const getStorageUsage = () => api.get('/storage/usage');
 export const getFiles = (path = '/') => api.get('/files', { params: { path } });
 export const getFileMetadata = (path) => api.get(`/files/${encodeURIComponent(path)}`);
 export const deleteFile = (path) => api.delete(`/files/${encodeURIComponent(path)}`);
-export const searchFiles = (query) => api.post('/files/search', { query });
+export const searchFiles = (query, limit = 50) => api.post('/files/search', { query, limit });
 export const pinFile = (id) => api.post(`/files/${id}/pin`);
 export const unpinFile = (id) => api.post(`/files/${id}/unpin`);
+export const dehydrateFile = (id) => api.post(`/files/${id}/dehydrate`);
 
 // Sync endpoints
 export const getSyncQueue = () => api.get('/sync/queue');

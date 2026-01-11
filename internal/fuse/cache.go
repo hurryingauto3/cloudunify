@@ -98,14 +98,15 @@ func (cm *CacheManager) ensureSpace(ctx context.Context, needed int64) error {
 
 	// Keep evicting until we have enough space
 	for currentSize+needed > cm.maxSize {
-		// Get LRU entries
-		entries, err := cm.db.GetLRUCacheEntries(ctx, 10)
+		// Get LRU entries (only unpinned files)
+		entries, err := cm.db.GetLRUCacheEntriesUnpinned(ctx, 10)
 		if err != nil {
 			return err
 		}
 
 		if len(entries) == 0 {
-			// No more entries to evict
+			// No more unpinned entries to evict
+			log.Printf("Cache: cannot evict more files, all remaining are pinned")
 			break
 		}
 
@@ -166,9 +167,9 @@ func (cm *CacheManager) GetStats(ctx context.Context) (*CacheStats, error) {
 	}
 
 	return &CacheStats{
-		CurrentSize: size,
-		MaxSize:     cm.maxSize,
-		FileCount:   len(entries),
+		CurrentSize:  size,
+		MaxSize:      cm.maxSize,
+		FileCount:    len(entries),
 		UsagePercent: float64(size) / float64(cm.maxSize) * 100,
 	}, nil
 }

@@ -10,12 +10,13 @@ import (
 
 // Common errors
 var (
-	ErrNotAuthenticated = errors.New("provider not authenticated")
-	ErrTokenExpired     = errors.New("token expired")
-	ErrQuotaExceeded    = errors.New("storage quota exceeded")
-	ErrFileNotFound     = errors.New("file not found")
-	ErrRateLimited      = errors.New("rate limited by provider")
-	ErrNetworkError     = errors.New("network error")
+	ErrNotAuthenticated  = errors.New("provider not authenticated")
+	ErrTokenExpired      = errors.New("token expired")
+	ErrQuotaExceeded     = errors.New("storage quota exceeded")
+	ErrFileNotFound      = errors.New("file not found")
+	ErrRateLimited       = errors.New("rate limited by provider")
+	ErrNetworkError      = errors.New("network error")
+	ErrRangeNotSupported = errors.New("range requests not supported")
 )
 
 // FileMetadata represents metadata about a file in cloud storage
@@ -90,6 +91,13 @@ type CloudProvider interface {
 
 	// DownloadStream returns a reader for streaming download
 	DownloadStream(ctx context.Context, fileID string) (io.ReadCloser, error)
+
+	// DownloadRange downloads a byte range of a file (for video seeking, etc.)
+	// Returns ErrRangeNotSupported if provider doesn't support range requests
+	DownloadRange(ctx context.Context, fileID string, start, end int64) (io.ReadCloser, error)
+
+	// SupportsRangeRequests returns whether this provider supports byte range downloads
+	SupportsRangeRequests() bool
 
 	// Delete removes a file from the cloud
 	Delete(ctx context.Context, fileID string) error

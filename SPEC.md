@@ -29,19 +29,22 @@ A cross-platform virtual filesystem that unifies multiple cloud storage provider
 - **Metadata sync from Google Drive** (background indexing)
 - **Storage allocator** (balanced usage policy)
 - **Quota-aware placement**
+- **Pin/unpin with cache protection** (pinned files never evicted from cache)
+- **Dehydrate/free up space** (remove local copy, keep cloud-only placeholder)
+- **UI search with 300ms debounce** (search files across all providers)
+- **Range read support for Google Drive** (byte-range HTTP requests for video seeking)
+- **Context menu in file browser** (right-click for Pin, Unpin, Dehydrate, Delete)
 
-### In Progress (Phase 1)
-- Range reads for large video seeking
-- Pin/unpin + "free up space"
-- Menubar/tray app
-- UI search
-
-### Planned (Phase 2+)
+### In Progress (Phase 2)
 - OneDrive integration
 - iCloud integration
+- Menubar/tray app
 - Finder badges + context menu (macOS)
+
+### Planned (Phase 3+)
 - Cross-platform packaging
 - Redundancy / mirroring
+- Conflict resolution UI
 
 ---
 
@@ -191,10 +194,10 @@ CloudUnify is a cross-provider "virtual disk + policy engine":
 **Focus:** Single provider + on-demand reads
 
 - [x] Download-on-open + cache (lazy/deferred download implemented 2026-01-11)
-- [ ] Range reads for large video seeking
+- [ ] Range reads for large video seeking 
 - [ ] Pin/unpin + "free up space" (dehydrate)
 - [x] Search (by path/name) from DB (API exists, UI partial)
-- [ ] Basic menubar/tray with pause/resume
+
 
 **Deliverable:** "It behaves like a cloud drive, not a sync toy"
 
@@ -219,6 +222,7 @@ CloudUnify is a cross-provider "virtual disk + policy engine":
 
 **Focus:** OneDrive-like Finder status
 
+- [ ] Basic menubar/tray with pause/resume
 - [ ] macOS: Finder Sync extension badges + context menu
 - [ ] Windows: Cloud Files API (placeholders + badges)
 - [ ] Linux: Tray + extended attributes (best-effort)

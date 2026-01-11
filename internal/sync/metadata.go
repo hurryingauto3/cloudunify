@@ -184,8 +184,8 @@ func (e *Engine) syncFolder(ctx context.Context, provider providers.CloudProvide
 				IsDir:       cf.IsDir,
 				Pinned:      false,
 			}
-			if err := e.db.CreateFile(ctx, newFile); err != nil {
-				log.Printf("Failed to create file %s: %v", fullPath, err)
+			if err := e.db.CreateOrUpdateFile(ctx, newFile); err != nil {
+				log.Printf("Failed to create/update file %s: %v", fullPath, err)
 			}
 
 			// Recurse if directory

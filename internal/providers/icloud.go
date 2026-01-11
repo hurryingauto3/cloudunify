@@ -9,10 +9,10 @@ import (
 
 // ICloudProvider implements CloudProvider for iCloud via WebDAV
 type ICloudProvider struct {
-	name       string
-	config     *AuthConfig
-	tokens     *TokenInfo
-	username   string
+	name        string
+	config      *AuthConfig
+	tokens      *TokenInfo
+	username    string
 	appPassword string // App-specific password for iCloud
 }
 
@@ -127,6 +127,16 @@ func (p *ICloudProvider) DownloadStream(ctx context.Context, fileID string) (io.
 
 	// TODO: Implement WebDAV streaming download
 	return nil, fmt.Errorf("not implemented")
+}
+
+// SupportsRangeRequests returns false - iCloud not yet implemented
+func (p *ICloudProvider) SupportsRangeRequests() bool {
+	return false
+}
+
+// DownloadRange is not implemented for iCloud yet
+func (p *ICloudProvider) DownloadRange(ctx context.Context, fileID string, start, end int64) (io.ReadCloser, error) {
+	return nil, ErrRangeNotSupported
 }
 
 // Delete removes a file from iCloud
