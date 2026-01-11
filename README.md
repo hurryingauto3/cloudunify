@@ -2,10 +2,7 @@
 
 A unified cloud storage system that mounts multiple cloud providers (Google Drive, OneDrive, iCloud) as a single virtual filesystem at `~/CloudUnify`. Copy files to the folder and they automatically sync to the cloud.
 
-<!-- Add image -->
-<!-- docs/images/dashboard.png -->
 ![CloudUnify Dashboard](docs/images/dashboard.png)
-
 
 ## Features
 

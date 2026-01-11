@@ -12,13 +12,16 @@ A cross-platform virtual filesystem that unifies multiple cloud storage provider
 ## Implementation Status
 
 **Last Updated:** 2026-01-11  
-**Current Phase:** Phase 1 (Daily Driver)
+**Current Phase:** Phase 2 Complete (Multi-Provider)
 
 ### Completed
 - FUSE virtual filesystem mounted at `~/CloudUnify`
 - Drag-and-drop file upload via Finder and terminal
-- Google Drive OAuth 2.0 authentication
-- Multipart upload (≤5MB) and resumable upload (>5MB)
+- **Google Drive OAuth 2.0 authentication** (full implementation)
+- **OneDrive OAuth 2.0 authentication** (full implementation with Microsoft Graph API)
+- **iCloud integration** (local folder approach - macOS/Windows)
+- Multipart upload (≤5MB) and resumable upload (>5MB) for Google Drive
+- OneDrive simple upload (≤4MB) and resumable upload (>4MB)
 - Background sync engine (3 upload workers, 5 download workers)
 - SQLite database for metadata
 - REST API on port 8080
@@ -26,25 +29,26 @@ A cross-platform virtual filesystem that unifies multiple cloud storage provider
 - React dashboard with Vite
 - **Lazy/deferred download** (files download only when content is read, not on Open)
 - **Provider deletion safety** (sync engine cleanup before DB delete)
-- **Metadata sync from Google Drive** (background indexing)
+- **Metadata sync from all providers** (background indexing)
 - **Storage allocator** (balanced usage policy)
 - **Quota-aware placement**
 - **Pin/unpin with cache protection** (pinned files never evicted from cache)
 - **Dehydrate/free up space** (remove local copy, keep cloud-only placeholder)
 - **UI search with 300ms debounce** (search files across all providers)
-- **Range read support for Google Drive** (byte-range HTTP requests for video seeking)
+- **Range read support** (byte-range HTTP requests for video seeking - Google Drive & OneDrive)
 - **Context menu in file browser** (right-click for Pin, Unpin, Dehydrate, Delete)
+- **Unified provider cards** (consistent UI for all providers)
+- **iCloud quota display** (shows folder usage, managed by Apple)
 
-### In Progress (Phase 2)
-- OneDrive integration
-- iCloud integration
+### In Progress (Phase 3)
 - Menubar/tray app
 - Finder badges + context menu (macOS)
 
-### Planned (Phase 3+)
+### Planned (Phase 4+)
 - Cross-platform packaging
 - Redundancy / mirroring
 - Conflict resolution UI
+- Windows Cloud Files API integration
 
 ---
 
@@ -116,19 +120,29 @@ CloudUnify is a cross-provider "virtual disk + policy engine":
 
 ### F) Provider Integrations (Beyond Basic CRUD)
 
-#### Google Drive
-- Shared drives support
-- Resumable uploads
-- Delta-like changes (Drive "changes" API)
+#### Google Drive ✅ COMPLETE
+- [x] OAuth 2.0 with token refresh
+- [x] Resumable uploads (>5MB)
+- [x] Range requests for video seeking
+- [x] Changes API for incremental sync
+- [ ] Shared drives support (planned)
 
-#### OneDrive
-- Delta queries for listing
-- Large file upload sessions
-- Business vs personal accounts
+#### OneDrive ✅ COMPLETE
+- [x] OAuth 2.0 with Microsoft Graph API
+- [x] Token refresh with PKCE
+- [x] Simple upload (≤4MB) and resumable upload sessions (>4MB)
+- [x] Range requests for video seeking
+- [x] ID-based subfolder listing (fixed itemNotFound issues)
+- [ ] Delta queries for listing (planned)
+- [ ] Business accounts (personal only for now)
 
-#### iCloud
-- Realistic plan: macOS-native integration first (local iCloud Drive folder mapping)
-- CloudKit/WebDAV only if accepting limitations
+#### iCloud ✅ COMPLETE (Local Folder Approach)
+- [x] macOS: `~/Library/Mobile Documents/com~apple~CloudDocs/`
+- [x] Windows: `%USERPROFILE%\iCloudDrive\` (requires iCloud for Windows)
+- [x] Folder size calculation for quota display
+- [x] Full CRUD operations via local filesystem
+- ⚠️ Linux: Not supported (no official Apple client)
+- ⚠️ Quota: Display-only (managed by iCloud settings, not API-controllable)
 
 ### G) Background Daemon / "OS Native" Behavior
 
@@ -189,35 +203,44 @@ CloudUnify is a cross-provider "virtual disk + policy engine":
 
 ---
 
-### Phase 1 — Usable as a Daily Driver *(Current Phase — 40%)*
+### Phase 1 — Usable as a Daily Driver *(COMPLETE)*
 
 **Focus:** Single provider + on-demand reads
 
 - [x] Download-on-open + cache (lazy/deferred download implemented 2026-01-11)
-- [ ] Range reads for large video seeking 
-- [ ] Pin/unpin + "free up space" (dehydrate)
-- [x] Search (by path/name) from DB (API exists, UI partial)
+- [x] Range reads for large video seeking (Google Drive & OneDrive)
+- [x] Pin/unpin + "free up space" (dehydrate)
+- [x] Search (by path/name) from DB (API + UI with 300ms debounce)
 
-**Deliverable:** "It behaves like a cloud drive, not a sync toy"
+**Deliverable:** "It behaves like a cloud drive, not a sync toy" ✅ ACHIEVED
 
 ---
 
-### Phase 2 — Unified Browse Across Providers *(30%)*
+### Phase 2 — Unified Browse Across Providers *(COMPLETE)*
 
 **Focus:** Multi-provider namespace
 
 - [x] Provider folders + merged view option (single merged tree exists)
-- [ ] OneDrive integration (stub only)
-- [ ] iCloud integration (stub only)
-- [ ] Cross-provider move/copy semantics (defined rules)
+- [x] **OneDrive integration** (full OAuth + Microsoft Graph API)
+  - Token exchange and refresh
+  - List files with pagination
+  - Upload (simple ≤4MB, resumable >4MB with 10MB chunks)
+  - Download with range request support
+  - Delete, CreateFolder, GetQuota, GetFileInfo
+- [x] **iCloud integration** (local folder approach)
+  - macOS: `~/Library/Mobile Documents/com~apple~CloudDocs/`
+  - Windows: `%USERPROFILE%\iCloudDrive\` (requires iCloud for Windows)
+  - Linux: Not supported (no official Apple client)
+  - Folder usage display (quota managed by Apple)
+- [x] Cross-provider move/copy semantics (defined rules)
 - [x] Allocation policy (balanced usage)
 - [x] Quota-aware placement
 
-**Deliverable:** "3TB pooled namespace, seamless browsing"
+**Deliverable:** "3TB pooled namespace, seamless browsing" ✅ ACHIEVED
 
 ---
 
-### Phase 3 — Native OS Indicators *(The "Feels Legit" Milestone)*
+### Phase 3 — Native OS Indicators *(Current Phase)*
 
 **Focus:** OneDrive-like Finder status
 
@@ -312,7 +335,7 @@ This allows rapid iteration on core functionality while building toward the nati
 - github.com/mattn/go-sqlite3 (database)
 - golang.org/x/oauth2 (OAuth flows)
 - google.golang.org/api/drive/v3 (Google Drive API)
-- github.com/Azure/azure-sdk-for-go (OneDrive via Graph API)
+- Microsoft Graph API (OneDrive - direct HTTP calls)
 - github.com/gorilla/mux (HTTP router)
 - github.com/gorilla/websocket (real-time updates)
 - github.com/rs/cors (CORS handling)
