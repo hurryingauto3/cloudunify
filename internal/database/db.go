@@ -778,6 +778,105 @@ func getFileName(path string) string {
 	return filepath.Base(path)
 }
 
+// GetProviderByType returns the first enabled provider of the given type
+func (db *DB) GetProviderByType(ctx context.Context, providerType ProviderType) (*Provider, error) {
+	var p Provider
+	var tokenExpiry sql.NullTime
+	err := db.QueryRowContext(ctx, `
+		SELECT id, name, type, enabled, quota_bytes, used_bytes, access_token, refresh_token, token_expiry, config, created_at, updated_at
+		FROM providers WHERE type = ? AND enabled = 1 LIMIT 1
+	`, providerType).Scan(&p.ID, &p.Name, &p.Type, &p.Enabled, &p.QuotaBytes, &p.UsedBytes, &p.AccessToken, &p.RefreshToken, &tokenExpiry, &p.Config, &p.CreatedAt, &p.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get provider by type: %w", err)
+	}
+	if tokenExpiry.Valid {
+		p.TokenExpiry = &tokenExpiry.Time
+	}
+	return &p, nil
+}
+
+// ListFilesInProviderDirectory returns files in a directory for a specific provider
+// The dirPath is relative to the provider root (e.g., "/" for provider root, "/Documents" for subfolder)
+func (db *DB) ListFilesInProviderDirectory(ctx context.Context, providerID int64, dirPath string) ([]*File, error) {
+	// Normalize path
+	if dirPath == "" || dirPath == "/" {
+		dirPath = "/"
+	}
+
+	// Build pattern for direct children only
+	pattern := dirPath
+	if !strings.HasSuffix(pattern, "/") {
+		pattern += "/"
+	}
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, virtual_path, provider_id, cloud_file_id, cloud_path, size_bytes, checksum, mime_type, status, pinned, is_dir, created_at, updated_at
+		FROM files
+		WHERE provider_id = ?
+		AND virtual_path LIKE ? || '%'
+		AND virtual_path != ?
+		AND instr(substr(virtual_path, length(?) + 1), '/') = 0
+		ORDER BY is_dir DESC, virtual_path
+	`, providerID, pattern, dirPath, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list files for provider: %w", err)
+	}
+	defer rows.Close()
+
+	var files []*File
+	for rows.Next() {
+		var f File
+		if err := rows.Scan(&f.ID, &f.VirtualPath, &f.ProviderID, &f.CloudFileID, &f.CloudPath, &f.SizeBytes, &f.Checksum, &f.MimeType, &f.Status, &f.Pinned, &f.IsDir, &f.CreatedAt, &f.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan file: %w", err)
+		}
+		files = append(files, &f)
+	}
+	return files, nil
+}
+
+// GetFileByProviderPath retrieves a file by provider ID and virtual path
+func (db *DB) GetFileByProviderPath(ctx context.Context, providerID int64, virtualPath string) (*File, error) {
+	var f File
+	err := db.QueryRowContext(ctx, `
+		SELECT id, virtual_path, provider_id, cloud_file_id, cloud_path, size_bytes, checksum, mime_type, status, pinned, is_dir, created_at, updated_at
+		FROM files WHERE provider_id = ? AND virtual_path = ?
+	`, providerID, virtualPath).Scan(&f.ID, &f.VirtualPath, &f.ProviderID, &f.CloudFileID, &f.CloudPath, &f.SizeBytes, &f.Checksum, &f.MimeType, &f.Status, &f.Pinned, &f.IsDir, &f.CreatedAt, &f.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file by provider path: %w", err)
+	}
+	return &f, nil
+}
+
+// CountFilesByProvider returns the number of files for each provider
+func (db *DB) CountFilesByProvider(ctx context.Context) (map[int64]int, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT provider_id, COUNT(*) as count
+		FROM files
+		GROUP BY provider_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count files by provider: %w", err)
+	}
+	defer rows.Close()
+
+	counts := make(map[int64]int)
+	for rows.Next() {
+		var providerID int64
+		var count int
+		if err := rows.Scan(&providerID, &count); err != nil {
+			return nil, fmt.Errorf("failed to scan count: %w", err)
+		}
+		counts[providerID] = count
+	}
+	return counts, nil
+}
+
 // StartCleanupRoutine starts a background routine to clean up old completed sync items
 func (db *DB) StartCleanupRoutine(ctx context.Context, interval time.Duration) {
 	go func() {

@@ -441,6 +441,13 @@ func (h *Handlers) HandleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 			dbProvider.UsedBytes = quota.UsedBytes
 			h.db.UpdateProvider(r.Context(), dbProvider)
 		}
+
+		// Trigger background metadata sync for this provider
+		go func(providerID int64) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			_ = h.syncEngine.SyncMetadata(ctx, providerID)
+		}(dbProvider.ID)
 	}
 
 	// Redirect to frontend with success
@@ -904,7 +911,6 @@ func (h *Handlers) LoadProvidersFromDB() error {
 			h.providerManager.RegisterProvider(dbProvider.ID, provider)
 			// Also register with sync engine for file operations
 			h.syncEngine.RegisterProvider(dbProvider.ID, provider)
-			log.Printf("Loaded provider %s (ID: %d) from database", dbProvider.Name, dbProvider.ID)
 		}
 	}
 
@@ -1099,5 +1105,108 @@ func (h *Handlers) HandleDehydrateFile(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"status":      "dehydrated",
 		"freed_bytes": cacheEntry.SizeBytes,
+	})
+}
+
+// HandleDebugDBCounts returns file counts by provider for debugging
+func (h *Handlers) HandleDebugDBCounts(w http.ResponseWriter, r *http.Request) {
+	counts, err := h.db.CountFilesByProvider(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "db_error", fmt.Sprintf("Failed to get counts: %v", err))
+		return
+	}
+
+	// Also get provider info
+	providers, err := h.db.ListProviders(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "db_error", fmt.Sprintf("Failed to list providers: %v", err))
+		return
+	}
+
+	result := make(map[string]interface{})
+	result["total_files"] = 0
+
+	providerData := make([]map[string]interface{}, 0)
+	for _, p := range providers {
+		count := counts[p.ID]
+		result["total_files"] = result["total_files"].(int) + count
+		providerData = append(providerData, map[string]interface{}{
+			"id":           p.ID,
+			"name":         p.Name,
+			"type":         p.Type,
+			"display_name": p.Type.DisplayName(),
+			"enabled":      p.Enabled,
+			"file_count":   count,
+			"quota_bytes":  p.QuotaBytes,
+			"used_bytes":   p.UsedBytes,
+		})
+	}
+	result["providers"] = providerData
+
+	respondJSON(w, http.StatusOK, result)
+}
+
+// HandleDebugTriggerIndex triggers metadata sync for a specific provider
+func (h *Handlers) HandleDebugTriggerIndex(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	idStr := vars["id"]
+	providerID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid_id", "Invalid provider ID")
+		return
+	}
+
+	// Verify provider exists
+	provider, err := h.db.GetProvider(r.Context(), providerID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "db_error", fmt.Sprintf("Failed to get provider: %v", err))
+		return
+	}
+	if provider == nil {
+		respondError(w, http.StatusNotFound, "not_found", "Provider not found")
+		return
+	}
+
+	// Trigger metadata sync in background
+	go func(pID int64) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		_ = h.syncEngine.SyncMetadata(ctx, pID)
+	}(providerID)
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":      "started",
+		"provider_id": providerID,
+		"message":     "Metadata sync started in background. Check logs for progress.",
+	})
+}
+
+// HandleDebugListProviderFiles lists files for a specific provider (for debugging)
+func (h *Handlers) HandleDebugListProviderFiles(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	idStr := vars["id"]
+	providerID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid_id", "Invalid provider ID")
+		return
+	}
+
+	// Get path from query param, default to root
+	dirPath := r.URL.Query().Get("path")
+	if dirPath == "" {
+		dirPath = "/"
+	}
+
+	files, err := h.db.ListFilesInProviderDirectory(r.Context(), providerID, dirPath)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "db_error", fmt.Sprintf("Failed to list files: %v", err))
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"provider_id": providerID,
+		"path":        dirPath,
+		"count":       len(files),
+		"files":       files,
 	})
 }

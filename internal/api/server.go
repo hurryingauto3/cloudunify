@@ -96,6 +96,11 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/config", s.handlers.HandleGetConfig).Methods("GET")
 	api.HandleFunc("/config", s.handlers.HandleUpdateConfig).Methods("PUT")
 
+	// Debug endpoints
+	api.HandleFunc("/debug/db_counts", s.handlers.HandleDebugDBCounts).Methods("GET")
+	api.HandleFunc("/debug/providers/{id}/index", s.handlers.HandleDebugTriggerIndex).Methods("POST")
+	api.HandleFunc("/debug/providers/{id}/files", s.handlers.HandleDebugListProviderFiles).Methods("GET")
+
 	// System
 	api.HandleFunc("/shutdown", s.handlers.HandleShutdown).Methods("POST")
 

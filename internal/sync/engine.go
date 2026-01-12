@@ -164,12 +164,10 @@ func (e *Engine) Stop() {
 // uploadWorker processes upload jobs from the queue
 func (e *Engine) uploadWorker(id int) {
 	defer e.wg.Done()
-	log.Printf("Upload worker %d started", id)
 
 	for {
 		select {
 		case <-e.ctx.Done():
-			log.Printf("Upload worker %d stopping", id)
 			return
 		default:
 			item, err := e.queue.DequeueByOperation(e.ctx, string(database.SyncOpUpload))
@@ -192,12 +190,10 @@ func (e *Engine) uploadWorker(id int) {
 // downloadWorker processes download jobs from the queue
 func (e *Engine) downloadWorker(id int) {
 	defer e.wg.Done()
-	log.Printf("Download worker %d started", id)
 
 	for {
 		select {
 		case <-e.ctx.Done():
-			log.Printf("Download worker %d stopping", id)
 			return
 		default:
 			// Download workers handle download and delete operations
@@ -327,7 +323,6 @@ func (e *Engine) processUpload(item *database.SyncQueueItem) {
 
 	// Mark job as complete
 	e.queue.Complete(e.ctx, item.ID)
-	log.Printf("Upload complete: %s", item.VirtualPath)
 }
 
 // processDownload handles a single download job
@@ -379,7 +374,7 @@ func (e *Engine) processDownload(item *database.SyncQueueItem) {
 		return
 	}
 
-	log.Printf("Downloaded %d bytes for %s", written, item.VirtualPath)
+	_ = written // Downloaded bytes
 	e.queue.Complete(e.ctx, item.ID)
 }
 
@@ -421,7 +416,7 @@ func (e *Engine) processDelete(item *database.SyncQueueItem) {
 	}
 
 	e.queue.Complete(e.ctx, item.ID)
-	log.Printf("Delete complete: %s (cloud file: %s)", item.VirtualPath, cloudFileID)
+	_ = cloudFileID // Delete complete
 }
 
 // EnqueueUpload adds an upload job to the queue

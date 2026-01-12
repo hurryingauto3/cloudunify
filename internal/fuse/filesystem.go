@@ -18,6 +18,105 @@ import (
 	"cloudunify/internal/sync"
 )
 
+// PathInfo contains parsed path information for routing
+type PathInfo struct {
+	IsRoot           bool   // Path is "/"
+	IsProvidersDir   bool   // Path is "/.providers"
+	IsProviderRoot   bool   // Path is "/.providers/<provider>" or "/<provider>"
+	ProviderName     string // The provider display name (e.g., "Google Drive", "OneDrive", "iCloud")
+	ProviderID       int64  // The provider database ID (0 if unknown/not looked up)
+	RelativePath     string // Path relative to provider root (e.g., "/Documents/file.txt") - DEPRECATED
+	VirtualPath      string // Full namespaced virtual path for DB lookup (e.g., "/OneDrive/Documents/file.txt")
+	InProvidersNS    bool   // Whether path is under /.providers/
+	OriginalPath     string // The original full path
+}
+
+// parsePath analyzes a FUSE path and returns routing information
+func (fs *CloudUnifyFS) parsePath(path string) *PathInfo {
+	info := &PathInfo{OriginalPath: path}
+
+	// Root directory
+	if path == "/" {
+		info.IsRoot = true
+		return info
+	}
+
+	// Clean and split path
+	cleanPath := strings.TrimPrefix(path, "/")
+	parts := strings.SplitN(cleanPath, "/", 2)
+	firstPart := parts[0]
+
+	// Check for .providers namespace
+	if firstPart == ".providers" {
+		info.InProvidersNS = true
+
+		if len(parts) == 1 {
+			// Just "/.providers"
+			info.IsProvidersDir = true
+			return info
+		}
+
+		// Parse provider name from second part
+		subPath := parts[1]
+		subParts := strings.SplitN(subPath, "/", 2)
+		info.ProviderName = subParts[0]
+
+		if len(subParts) == 1 {
+			// "/.providers/<provider>"
+			info.IsProviderRoot = true
+			info.RelativePath = "/"
+			info.VirtualPath = "/" + info.ProviderName
+		} else {
+			// "/.providers/<provider>/<path>"
+			info.RelativePath = "/" + subParts[1]
+			info.VirtualPath = "/" + info.ProviderName + "/" + subParts[1]
+		}
+
+		return info
+	}
+
+	// Check if first part is a known provider name
+	knownProviders := database.AllProviderDisplayNames()
+	for _, pn := range knownProviders {
+		if firstPart == pn {
+			info.ProviderName = pn
+			info.InProvidersNS = false // In merged namespace but provider-prefixed
+
+			if len(parts) == 1 {
+				// "/<provider>"
+				info.IsProviderRoot = true
+				info.RelativePath = "/"
+				info.VirtualPath = "/" + pn
+			} else {
+				// "/<provider>/<path>"
+				info.RelativePath = "/" + parts[1]
+				info.VirtualPath = "/" + pn + "/" + parts[1]
+			}
+
+			return info
+		}
+	}
+
+	// Not a provider path - treat as merged namespace path
+	// This would be for files at the root of merged view
+	info.RelativePath = "/" + cleanPath
+	info.VirtualPath = "/" + cleanPath
+	return info
+}
+
+// getProviderID looks up the provider ID for a given provider display name
+func (fs *CloudUnifyFS) getProviderID(providerName string) (int64, error) {
+	providerType := database.ProviderTypeFromDisplayName(providerName)
+	provider, err := fs.db.GetProviderByType(fs.ctx, providerType)
+	if err != nil {
+		return 0, err
+	}
+	if provider == nil {
+		return 0, nil
+	}
+	return provider.ID, nil
+}
+
 // DownloadProgressCallback is called with download progress updates
 type DownloadProgressCallback func(virtualPath string, downloaded, total int64, status string)
 
@@ -146,20 +245,116 @@ func (fs *CloudUnifyFS) Statfs(path string, stat *fuse.Statfs_t) int {
 
 // Getattr returns file attributes
 func (fs *CloudUnifyFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
-	// Root directory
-	if path == "/" {
+	pathInfo := fs.parsePath(path)
+	now := time.Now()
+
+	// Helper to set directory attributes
+	setDirAttr := func() {
 		stat.Mode = fuse.S_IFDIR | 0755
 		stat.Nlink = 2
 		stat.Uid = uint32(os.Getuid())
 		stat.Gid = uint32(os.Getgid())
-		now := time.Now()
 		stat.Atim = fuse.NewTimespec(now)
 		stat.Mtim = fuse.NewTimespec(now)
 		stat.Ctim = fuse.NewTimespec(now)
+	}
+
+	// Root directory
+	if pathInfo.IsRoot {
+		setDirAttr()
 		return 0
 	}
 
-	// Check for pending files first (files being written)
+	// .providers directory
+	if pathInfo.IsProvidersDir {
+		setDirAttr()
+		return 0
+	}
+
+	// Provider root directories (e.g., /.providers/OneDrive or /OneDrive)
+	if pathInfo.IsProviderRoot {
+		// Check if it's a known provider
+		knownProviders := database.AllProviderDisplayNames()
+		for _, pn := range knownProviders {
+			if pn == pathInfo.ProviderName {
+				setDirAttr()
+				return 0
+			}
+		}
+		return -fuse.ENOENT
+	}
+
+	// For paths with a provider, look up the file in that provider's namespace
+	if pathInfo.ProviderName != "" {
+		providerID, err := fs.getProviderID(pathInfo.ProviderName)
+		if err != nil {
+			return -fuse.EIO
+		}
+		if providerID == 0 {
+			return -fuse.ENOENT
+		}
+
+		// Check for pending files first (files being written)
+		fs.pendingFilesMu.RLock()
+		pending, isPending := fs.pendingFiles[path]
+		fs.pendingFilesMu.RUnlock()
+
+		if isPending {
+			if info, err := os.Stat(pending.StagingPath); err == nil {
+				stat.Mode = fuse.S_IFREG | 0644
+				stat.Nlink = 1
+				stat.Size = info.Size()
+				stat.Uid = uint32(os.Getuid())
+				stat.Gid = uint32(os.Getgid())
+				stat.Atim = fuse.NewTimespec(info.ModTime())
+				stat.Mtim = fuse.NewTimespec(info.ModTime())
+				stat.Ctim = fuse.NewTimespec(pending.CreatedAt)
+				return 0
+			}
+		}
+
+		// Check staging directory
+		stagingPath := fs.getStagingPath(path)
+		if info, err := os.Stat(stagingPath); err == nil {
+			stat.Mode = fuse.S_IFREG | 0644
+			stat.Nlink = 1
+			stat.Size = info.Size()
+			stat.Uid = uint32(os.Getuid())
+			stat.Gid = uint32(os.Getgid())
+			stat.Atim = fuse.NewTimespec(info.ModTime())
+			stat.Mtim = fuse.NewTimespec(info.ModTime())
+			stat.Ctim = fuse.NewTimespec(info.ModTime())
+			return 0
+		}
+
+		// Look up file in database by virtual path (includes provider namespace)
+		file, err := fs.db.GetFileByPath(fs.ctx, pathInfo.VirtualPath)
+		if err != nil {
+			return -fuse.EIO
+		}
+
+		if file != nil {
+			if file.IsDir {
+				stat.Mode = fuse.S_IFDIR | 0755
+				stat.Nlink = 2
+			} else {
+				stat.Mode = fuse.S_IFREG | 0644
+				stat.Nlink = 1
+				stat.Size = file.SizeBytes
+			}
+
+			stat.Uid = uint32(os.Getuid())
+			stat.Gid = uint32(os.Getgid())
+			stat.Atim = fuse.NewTimespec(file.UpdatedAt)
+			stat.Mtim = fuse.NewTimespec(file.UpdatedAt)
+			stat.Ctim = fuse.NewTimespec(file.CreatedAt)
+			return 0
+		}
+
+		return -fuse.ENOENT
+	}
+
+	// Fallback: Check for pending files first (files being written)
 	fs.pendingFilesMu.RLock()
 	pending, isPending := fs.pendingFiles[path]
 	fs.pendingFilesMu.RUnlock()
@@ -194,7 +389,7 @@ func (fs *CloudUnifyFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 		return 0
 	}
 
-	// Look up file in database
+	// Look up file in database (legacy path support)
 	file, err := fs.db.GetFileByPath(fs.ctx, path)
 	if err != nil {
 		return -fuse.EIO
@@ -226,7 +421,127 @@ func (fs *CloudUnifyFS) Readdir(path string, fill func(name string, stat *fuse.S
 	fill(".", nil, 0)
 	fill("..", nil, 0)
 
-	// Track names we've seen
+	pathInfo := fs.parsePath(path)
+
+	// Root directory: show provider directories and .providers
+	if pathInfo.IsRoot {
+		var stat fuse.Stat_t
+		stat.Mode = fuse.S_IFDIR | 0755
+
+		// Show .providers directory
+		if !fill(".providers", &stat, 0) {
+			return 0
+		}
+
+		// Show all known provider directories
+		for _, providerName := range database.AllProviderDisplayNames() {
+			if !fill(providerName, &stat, 0) {
+				return 0
+			}
+		}
+		return 0
+	}
+
+	// .providers directory: show all provider directories
+	if pathInfo.IsProvidersDir {
+		var stat fuse.Stat_t
+		stat.Mode = fuse.S_IFDIR | 0755
+
+		for _, providerName := range database.AllProviderDisplayNames() {
+			if !fill(providerName, &stat, 0) {
+				return 0
+			}
+		}
+		return 0
+	}
+
+	// Provider directory (either /.providers/<provider> or /<provider>)
+	if pathInfo.ProviderName != "" {
+		providerID, err := fs.getProviderID(pathInfo.ProviderName)
+		if err != nil {
+			log.Printf("Readdir error getting provider ID: %v", err)
+			return -fuse.EIO
+		}
+
+		// If provider doesn't exist yet (not authenticated), show empty directory
+		if providerID == 0 {
+			return 0
+		}
+
+		// Track names we've seen
+		seenNames := make(map[string]bool)
+
+		// List files in this provider's directory from database
+		// Use VirtualPath which includes the provider namespace (e.g., "/OneDrive" or "/OneDrive/Documents")
+		files, err := fs.db.ListFilesInDirectory(fs.ctx, pathInfo.VirtualPath)
+		if err != nil {
+			log.Printf("Readdir error listing provider files: %v", err)
+			return -fuse.EIO
+		}
+
+		for _, file := range files {
+			name := filepath.Base(file.VirtualPath)
+			seenNames[name] = true
+			var stat fuse.Stat_t
+
+			if file.IsDir {
+				stat.Mode = fuse.S_IFDIR | 0755
+			} else {
+				stat.Mode = fuse.S_IFREG | 0644
+				stat.Size = file.SizeBytes
+			}
+
+			if !fill(name, &stat, 0) {
+				break
+			}
+		}
+
+		// Also include pending files for this path
+		fs.pendingFilesMu.RLock()
+		for pendingPath, pending := range fs.pendingFiles {
+			pendingDir := filepath.Dir(pendingPath)
+			if pendingDir == path {
+				name := filepath.Base(pendingPath)
+				if !seenNames[name] {
+					seenNames[name] = true
+					var stat fuse.Stat_t
+					stat.Mode = fuse.S_IFREG | 0644
+					stat.Size = pending.Size
+					if !fill(name, &stat, 0) {
+						break
+					}
+				}
+			}
+		}
+		fs.pendingFilesMu.RUnlock()
+
+		// Also include files from staging directory
+		stagingDir := fs.getStagingPath(path)
+		if entries, err := os.ReadDir(stagingDir); err == nil {
+			for _, entry := range entries {
+				name := entry.Name()
+				if !seenNames[name] && !strings.HasPrefix(name, ".") {
+					seenNames[name] = true
+					var stat fuse.Stat_t
+					if entry.IsDir() {
+						stat.Mode = fuse.S_IFDIR | 0755
+					} else {
+						stat.Mode = fuse.S_IFREG | 0644
+						if info, err := entry.Info(); err == nil {
+							stat.Size = info.Size()
+						}
+					}
+					if !fill(name, &stat, 0) {
+						break
+					}
+				}
+			}
+		}
+
+		return 0
+	}
+
+	// Fallback for legacy paths (files directly in database with old-style paths)
 	seenNames := make(map[string]bool)
 
 	// List files in this directory from database
@@ -431,9 +746,7 @@ func (fs *CloudUnifyFS) downloadToCache(file *database.File) (string, error) {
 		fs.progressCallback(file.VirtualPath, 0, file.SizeBytes, "downloading")
 	}
 
-	log.Printf("FUSE Download: starting download for %s (size: %d bytes)", file.VirtualPath, file.SizeBytes)
-
-	// Try to use DownloadWithProgress if available (Google Drive specific)
+	// Download to cache file
 	if gdProvider, ok := provider.(*providers.GoogleDriveProvider); ok {
 		err = gdProvider.DownloadWithProgress(ctx, file.CloudFileID, cacheFile, file.SizeBytes,
 			func(downloaded, total int64) {
@@ -496,12 +809,13 @@ func (fs *CloudUnifyFS) downloadToCache(file *database.File) (string, error) {
 		fs.progressCallback(file.VirtualPath, file.SizeBytes, file.SizeBytes, "completed")
 	}
 
-	log.Printf("FUSE Download: completed download for %s", file.VirtualPath)
 	return cachePath, nil
 }
 
 // Open opens a file
 func (fs *CloudUnifyFS) Open(path string, flags int) (int, uint64) {
+	pathInfo := fs.parsePath(path)
+
 	// Check if this is a write operation
 	isWrite := (flags & (fuse.O_WRONLY | fuse.O_RDWR | fuse.O_CREAT | fuse.O_TRUNC)) != 0
 
@@ -574,7 +888,25 @@ func (fs *CloudUnifyFS) Open(path string, flags int) (int, uint64) {
 	}
 
 	// Check database for remote files (read-only access)
-	file, err := fs.db.GetFileByPath(fs.ctx, path)
+	var file *database.File
+	var err error
+
+	// If we have a provider name, look up in that provider's namespace
+	if pathInfo.ProviderName != "" {
+		providerID, pErr := fs.getProviderID(pathInfo.ProviderName)
+		if pErr != nil {
+			return -fuse.EIO, 0
+		}
+		if providerID == 0 {
+			return -fuse.ENOENT, 0
+		}
+		// Use VirtualPath which includes the provider prefix (e.g., "/OneDrive/Documents/file.txt")
+		file, err = fs.db.GetFileByProviderPath(fs.ctx, providerID, pathInfo.VirtualPath)
+	} else {
+		// Fallback for legacy paths
+		file, err = fs.db.GetFileByPath(fs.ctx, path)
+	}
+
 	if err != nil {
 		return -fuse.EIO, 0
 	}
@@ -605,11 +937,7 @@ func (fs *CloudUnifyFS) Open(path string, flags int) (int, uint64) {
 	}
 
 	if cache == nil {
-		// File not cached, DEFER download until Read() is called.
-		// This prevents aggressive downloading when the OS (Finder/Explorer) accesses checks files
-		// for metadata, thumbnails, or icons without reading the full content.
-		log.Printf("FUSE Open: file %s not cached, deferring download until Read", path)
-
+		// File not cached - defer download until Read() is called
 		handle = &FileHandle{
 			Path:      path,
 			File:      nil, // Will be opened in Read()
@@ -649,13 +977,10 @@ func (fs *CloudUnifyFS) Read(path string, buff []byte, ofst int64, fh uint64) in
 	// Handle deferred download
 	if handle.File == nil {
 		if handle.FileEntry == nil {
-			log.Printf("FUSE Read: invalid handle state (no file, no entry) for %s", path)
 			return -fuse.EIO
 		}
 
-		log.Printf("FUSE Read: accessing content for %s, starting download...", path)
-
-		// This is a deferred download - execute it now
+		// Deferred download - execute now
 		// Notify progress: starting
 		if fs.progressCallback != nil {
 			fs.progressCallback(path, 0, handle.FileEntry.SizeBytes, "starting")

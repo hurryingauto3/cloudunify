@@ -58,8 +58,18 @@ func (e *Engine) SyncMetadata(ctx context.Context, providerID int64) error {
 		return nil
 	}
 
-	log.Printf("Starting metadata sync for provider %d", providerID)
-	return e.syncFolder(ctx, provider, providerID, "root", "/")
+	// Get provider info from database to determine the namespaced path
+	dbProvider, err := e.db.GetProvider(ctx, providerID)
+	if err != nil {
+		return fmt.Errorf("failed to get provider info: %w", err)
+	}
+	if dbProvider == nil {
+		return fmt.Errorf("provider %d not found in database", providerID)
+	}
+
+	// Use provider display name as root path namespace (e.g., "/OneDrive", "/Google Drive")
+	rootPath := "/" + dbProvider.Type.DisplayName()
+	return e.syncFolder(ctx, provider, providerID, "root", rootPath)
 }
 
 func (e *Engine) syncFolder(ctx context.Context, provider providers.CloudProvider, providerID int64, remoteID, virtualPath string) error {
@@ -69,8 +79,9 @@ func (e *Engine) syncFolder(ctx context.Context, provider providers.CloudProvide
 		return err
 	}
 
-	// List local DB files
-	dbFiles, err := e.db.ListFilesInDirectory(ctx, virtualPath)
+	// List local DB files for THIS provider only
+	// This prevents cross-provider conflicts when files have the same names
+	dbFiles, err := e.db.ListFilesInProviderDirectory(ctx, providerID, virtualPath)
 	if err != nil {
 		return err
 	}
@@ -171,8 +182,7 @@ func (e *Engine) syncFolder(ctx context.Context, provider providers.CloudProvide
 				}
 			}
 		} else {
-			// Insert new file
-			// Default new files to pinned=false
+			// Insert new file - default new files to pinned=false
 			newFile := &database.File{
 				VirtualPath: fullPath,
 				ProviderID:  providerID,
@@ -201,9 +211,8 @@ func (e *Engine) syncFolder(ctx context.Context, provider providers.CloudProvide
 	for _, f := range dbFileMap {
 		// Only delete if it thinks it's synced. If it's uploading/pending, don't delete!
 		if f.Status == database.FileStatusSynced || f.Status == database.FileStatusError {
-			log.Printf("Deleting file %s (remote missing)", f.VirtualPath)
 			if err := e.db.DeleteFile(ctx, f.ID); err != nil {
-				log.Printf("Failed to delete file %s: %v", f.VirtualPath, err)
+				log.Printf("Failed to delete stale file %s: %v", f.VirtualPath, err)
 			}
 		}
 	}

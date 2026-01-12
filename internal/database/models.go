@@ -14,6 +14,40 @@ const (
 	ProviderICloud      ProviderType = "icloud"
 )
 
+// ProviderDisplayName returns the human-readable display name for the provider type
+// This is used for the FUSE filesystem namespace (e.g., /Google Drive/, /OneDrive/)
+func (pt ProviderType) DisplayName() string {
+	switch pt {
+	case ProviderGoogleDrive:
+		return "Google Drive"
+	case ProviderOneDrive:
+		return "OneDrive"
+	case ProviderICloud:
+		return "iCloud"
+	default:
+		return string(pt)
+	}
+}
+
+// ProviderTypeFromDisplayName converts a display name back to a ProviderType
+func ProviderTypeFromDisplayName(displayName string) ProviderType {
+	switch displayName {
+	case "Google Drive":
+		return ProviderGoogleDrive
+	case "OneDrive":
+		return ProviderOneDrive
+	case "iCloud":
+		return ProviderICloud
+	default:
+		return ProviderType(displayName)
+	}
+}
+
+// AllProviderDisplayNames returns the display names of all known providers
+func AllProviderDisplayNames() []string {
+	return []string{"Google Drive", "OneDrive", "iCloud"}
+}
+
 // FileStatus represents the sync status of a file
 type FileStatus string
 
